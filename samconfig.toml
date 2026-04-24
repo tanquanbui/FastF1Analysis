@@ -1,0 +1,26 @@
+version = 0.1
+
+[default.global.parameters]
+stack_name = "pitstop-analytics"
+
+[default.deploy.parameters]
+region = "ap-southeast-2"
+capabilities = "CAPABILITY_IAM CAPABILITY_NAMED_IAM"
+confirm_changeset = true
+resolve_s3 = true
+s3_prefix = "pitstop-analytics"
+parameter_overrides = "Environment=\"dev\""
+
+[default.sync.parameters]
+watch = true
+
+[default.local_start_api.parameters]
+warm_containers = "EAGER"
+
+[prod.deploy.parameters]
+region = "ap-southeast-2"
+capabilities = "CAPABILITY_IAM CAPABILITY_NAMED_IAM"
+confirm_changeset = true
+resolve_s3 = true
+s3_prefix = "pitstop-analytics-prod"
+parameter_overrides = "Environment=\"prod\""
