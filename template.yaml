@@ -1,0 +1,624 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  PitStop Analytics — serverless F1 race intelligence platform.
+  Phase 1: ingestion + processing + API + dashboard.
+  Phase 2: fingerprinting + ML predictions + championship simulation.
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, prod]
+    Description: Deployment environment.
+  EnablePhase2:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: Provision Phase 2 (fingerprint/trainer/predictor) resources.
+  EnableDataPipeline:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: >
+      Provision the ingestion + processor Lambdas. Set false when deploying
+      from a machine that can't build native-dep wheels (no Docker). The API
+      and dashboard work without them — DynamoDB just won't auto-populate.
+  LogRetentionDays:
+    Type: Number
+    Default: 30
+    AllowedValues: [7, 14, 30, 60, 90, 180, 365]
+
+Conditions:
+  IsProd: !Equals [!Ref Environment, "prod"]
+  Phase2Enabled: !Equals [!Ref EnablePhase2, "true"]
+  DataPipelineEnabled: !Equals [!Ref EnableDataPipeline, "true"]
+
+Globals:
+  Function:
+    Runtime: python3.11
+    Architectures: [arm64]
+    Tracing: Active
+    Environment:
+      Variables:
+        ENVIRONMENT: !Ref Environment
+        TABLE_NAME: !Ref F1DataTable
+        RAW_BUCKET: !Sub "pitstop-raw-${AWS::AccountId}"
+        PROCESSED_BUCKET: !Sub "pitstop-processed-${AWS::AccountId}"
+        MODELS_BUCKET: !Sub "pitstop-models-${AWS::AccountId}"
+        LOG_LEVEL: !If [IsProd, "INFO", "DEBUG"]
+        POWERTOOLS_SERVICE_NAME: pitstop-analytics
+  Api:
+    TracingEnabled: true
+    # CORS is handled by the ApiFunction (see functions/api/app.py _response).
+    # We can't put Cors here because SAM only honours it when DefinitionBody is
+    # an inline Swagger doc — and we use plain proxy integration.
+
+Resources:
+  # ---------- Shared Layer ----------
+  SharedLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: !Sub "pitstop-shared-${Environment}"
+      Description: Shared circuit profiles + fingerprint dimension constants.
+      ContentUri: shared/
+      CompatibleRuntimes: [python3.11]
+      CompatibleArchitectures: [arm64]
+      RetentionPolicy: Retain
+
+  # ---------- S3 ----------
+  RawDataBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "pitstop-raw-${AWS::AccountId}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: ArchiveOldRaw
+            Status: Enabled
+            Transitions:
+              - StorageClass: GLACIER
+                TransitionInDays: 90
+      NotificationConfiguration:
+        EventBridgeConfiguration:
+          EventBridgeEnabled: true
+
+  ProcessedDataBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "pitstop-processed-${AWS::AccountId}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  ModelsBucket:
+    Type: AWS::S3::Bucket
+    Condition: Phase2Enabled
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "pitstop-models-${AWS::AccountId}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  DashboardBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "pitstop-dashboard-${AWS::AccountId}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  DashboardBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref DashboardBucket
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub "${DashboardBucket.Arn}/*"
+            Condition:
+              StringEquals:
+                "AWS:SourceArn": !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${DashboardDistribution}"
+
+  # ---------- DynamoDB ----------
+  F1DataTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: F1Data
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+        - AttributeName: DriverCode
+          AttributeType: S
+        - AttributeName: RaceKey
+          AttributeType: S
+        - AttributeName: TeamCode
+          AttributeType: S
+        - AttributeName: TrackKey
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: DriverRaceIndex
+          KeySchema:
+            - AttributeName: DriverCode
+              KeyType: HASH
+            - AttributeName: RaceKey
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: TeamTrackIndex
+          KeySchema:
+            - AttributeName: TeamCode
+              KeyType: HASH
+            - AttributeName: TrackKey
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+
+  # ---------- Lambda: Ingestion ----------
+  IngestionFunction:
+    Type: AWS::Serverless::Function
+    Condition: DataPipelineEnabled
+    Properties:
+      FunctionName: !Sub "pitstop-ingestion-${Environment}"
+      CodeUri: functions/ingestion/
+      Handler: app.handler
+      MemorySize: 1024
+      Timeout: 600
+      EphemeralStorage:
+        Size: 2048
+      Environment:
+        Variables:
+          FASTF1_CACHE_DIR: /tmp/fastf1_cache
+          ERGAST_BASE_URL: https://api.jolpi.ca/ergast/f1
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - s3:PutObject
+                - s3:PutObjectAcl
+              Resource: !Sub "${RawDataBucket.Arn}/*"
+        - Statement:
+            - Effect: Allow
+              Action:
+                - s3:ListBucket
+              Resource: !GetAtt RawDataBucket.Arn
+
+  IngestionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Condition: DataPipelineEnabled
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${IngestionFunction}"
+      RetentionInDays: !Ref LogRetentionDays
+
+  # ---------- Lambda: Processor ----------
+  ProcessorFunction:
+    Type: AWS::Serverless::Function
+    Condition: DataPipelineEnabled
+    Properties:
+      FunctionName: !Sub "pitstop-processor-${Environment}"
+      CodeUri: functions/processor/
+      Handler: app.handler
+      MemorySize: 512
+      Timeout: 300
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+              Resource: !Sub "${RawDataBucket.Arn}/*"
+            - Effect: Allow
+              Action:
+                - s3:PutObject
+              Resource: !Sub "${ProcessedDataBucket.Arn}/*"
+            - Effect: Allow
+              Action:
+                - dynamodb:PutItem
+                - dynamodb:BatchWriteItem
+                - dynamodb:UpdateItem
+                - dynamodb:Query
+              Resource:
+                - !GetAtt F1DataTable.Arn
+                - !Sub "${F1DataTable.Arn}/index/*"
+      Events:
+        S3RawDataCreated:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              source: ["aws.s3"]
+              detail-type: ["Object Created"]
+              detail:
+                bucket:
+                  name: [!Sub "pitstop-raw-${AWS::AccountId}"]
+                object:
+                  key:
+                    - prefix: "races/"
+
+  ProcessorLogGroup:
+    Type: AWS::Logs::LogGroup
+    Condition: DataPipelineEnabled
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ProcessorFunction}"
+      RetentionInDays: !Ref LogRetentionDays
+
+  # ---------- Lambda: API ----------
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "pitstop-api-${Environment}"
+      CodeUri: functions/api/
+      Handler: app.handler
+      MemorySize: 256
+      Timeout: 30
+      Layers:
+        - !Ref SharedLayer
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+                - dynamodb:GetItem
+              Resource:
+                - !GetAtt F1DataTable.Arn
+                - !Sub "${F1DataTable.Arn}/index/*"
+      Events:
+        ApiRoot:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /{proxy+}
+            Method: ANY
+
+  ApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ApiFunction}"
+      RetentionInDays: !Ref LogRetentionDays
+
+  # ---------- API Gateway ----------
+  RestApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub "pitstop-api-${Environment}"
+      StageName: !Ref Environment
+      MethodSettings:
+        - ResourcePath: /*
+          HttpMethod: "*"
+          ThrottlingBurstLimit: 200
+          ThrottlingRateLimit: 100
+          MetricsEnabled: true
+
+  # ---------- EventBridge Schedules ----------
+  PostRaceSchedule:
+    Type: AWS::Events::Rule
+    Condition: DataPipelineEnabled
+    Properties:
+      Name: !Sub "pitstop-post-race-${Environment}"
+      Description: Triggers ingestion every Monday at 06:00 UTC after race weekend.
+      ScheduleExpression: "cron(0 6 ? * MON *)"
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt IngestionFunction.Arn
+          Id: IngestionTarget
+          Input: '{"source": "scheduled", "session_types": ["R", "Q", "S"]}'
+
+  PostRaceScheduleInvokePermission:
+    Type: AWS::Lambda::Permission
+    Condition: DataPipelineEnabled
+    Properties:
+      FunctionName: !Ref IngestionFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt PostRaceSchedule.Arn
+
+  PreRaceSchedule:
+    Type: AWS::Events::Rule
+    Condition: Phase2Enabled
+    Properties:
+      Name: !Sub "pitstop-pre-race-${Environment}"
+      Description: Triggers Thursday pre-race analysis at 12:00 UTC.
+      ScheduleExpression: "cron(0 12 ? * THU *)"
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt PredictorFunction.Arn
+          Id: PredictorTarget
+
+  PreRaceScheduleInvokePermission:
+    Type: AWS::Lambda::Permission
+    Condition: Phase2Enabled
+    Properties:
+      FunctionName: !Ref PredictorFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt PreRaceSchedule.Arn
+
+  MonthlyRetrainingSchedule:
+    Type: AWS::Events::Rule
+    Condition: Phase2Enabled
+    Properties:
+      Name: !Sub "pitstop-monthly-retrain-${Environment}"
+      Description: Retrain XGBoost model on the 1st of each month at 02:00 UTC.
+      ScheduleExpression: "cron(0 2 1 * ? *)"
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt TrainerFunction.Arn
+          Id: TrainerTarget
+
+  MonthlyRetrainingInvokePermission:
+    Type: AWS::Lambda::Permission
+    Condition: Phase2Enabled
+    Properties:
+      FunctionName: !Ref TrainerFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt MonthlyRetrainingSchedule.Arn
+
+  # ---------- Phase 2: Fingerprint Lambda ----------
+  FingerprintFunction:
+    Type: AWS::Serverless::Function
+    Condition: Phase2Enabled
+    Properties:
+      FunctionName: !Sub "pitstop-fingerprint-${Environment}"
+      CodeUri: functions/fingerprint/
+      Handler: app.handler
+      MemorySize: 512
+      Timeout: 300
+      Layers:
+        - !Ref SharedLayer
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+                - dynamodb:PutItem
+                - dynamodb:BatchWriteItem
+                - dynamodb:UpdateItem
+              Resource:
+                - !GetAtt F1DataTable.Arn
+                - !Sub "${F1DataTable.Arn}/index/*"
+
+  FingerprintLogGroup:
+    Type: AWS::Logs::LogGroup
+    Condition: Phase2Enabled
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${FingerprintFunction}"
+      RetentionInDays: !Ref LogRetentionDays
+
+  # ---------- Phase 2: Trainer Lambda ----------
+  TrainerFunction:
+    Type: AWS::Serverless::Function
+    Condition: Phase2Enabled
+    Properties:
+      FunctionName: !Sub "pitstop-trainer-${Environment}"
+      CodeUri: functions/trainer/
+      Handler: app.handler
+      MemorySize: 256
+      Timeout: 600
+      Layers:
+        - !Ref SharedLayer
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+                - dynamodb:Scan
+              Resource:
+                - !GetAtt F1DataTable.Arn
+                - !Sub "${F1DataTable.Arn}/index/*"
+            - Effect: Allow
+              Action:
+                - s3:PutObject
+                - s3:GetObject
+              Resource: !Sub "${ModelsBucket.Arn}/*"
+            - Effect: Allow
+              Action:
+                - sagemaker:CreateTrainingJob
+                - sagemaker:DescribeTrainingJob
+              Resource: !Sub "arn:aws:sagemaker:${AWS::Region}:${AWS::AccountId}:training-job/*"
+            - Effect: Allow
+              Action:
+                - iam:PassRole
+              Resource: !GetAtt SageMakerExecutionRole.Arn
+
+  TrainerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Condition: Phase2Enabled
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${TrainerFunction}"
+      RetentionInDays: !Ref LogRetentionDays
+
+  SageMakerExecutionRole:
+    Type: AWS::IAM::Role
+    Condition: Phase2Enabled
+    Properties:
+      RoleName: !Sub "pitstop-sagemaker-exec-${Environment}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: sagemaker.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ModelsBucketAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                Resource:
+                  - !GetAtt ModelsBucket.Arn
+                  - !Sub "${ModelsBucket.Arn}/*"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonSageMakerFullAccess
+
+  # ---------- Phase 2: Predictor Lambda ----------
+  PredictorFunction:
+    Type: AWS::Serverless::Function
+    Condition: Phase2Enabled
+    Properties:
+      FunctionName: !Sub "pitstop-predictor-${Environment}"
+      CodeUri: functions/predictor/
+      Handler: app.handler
+      MemorySize: 1024
+      Timeout: 300
+      Layers:
+        - !Ref SharedLayer
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+                - dynamodb:GetItem
+                - dynamodb:PutItem
+                - dynamodb:BatchWriteItem
+              Resource:
+                - !GetAtt F1DataTable.Arn
+                - !Sub "${F1DataTable.Arn}/index/*"
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+              Resource: !Sub "${ModelsBucket.Arn}/*"
+
+  PredictorLogGroup:
+    Type: AWS::Logs::LogGroup
+    Condition: Phase2Enabled
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${PredictorFunction}"
+      RetentionInDays: !Ref LogRetentionDays
+
+  # ---------- CloudFront ----------
+  CloudFrontOAC:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub "pitstop-dashboard-oac-${Environment}"
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  DashboardDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        DefaultRootObject: index.html
+        PriceClass: PriceClass_100
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        Origins:
+          - Id: S3Dashboard
+            DomainName: !GetAtt DashboardBucket.RegionalDomainName
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+            OriginAccessControlId: !GetAtt CloudFrontOAC.Id
+        DefaultCacheBehavior:
+          TargetOriginId: S3Dashboard
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS]
+          CachedMethods: [GET, HEAD]
+          Compress: true
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6  # CachingOptimized
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+
+Outputs:
+  ApiEndpoint:
+    Description: API Gateway invoke URL.
+    Value: !Sub "https://${RestApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}"
+    Export:
+      Name: !Sub "${AWS::StackName}-ApiEndpoint"
+
+  DashboardUrl:
+    Description: CloudFront distribution URL.
+    Value: !Sub "https://${DashboardDistribution.DomainName}"
+    Export:
+      Name: !Sub "${AWS::StackName}-DashboardUrl"
+
+  DashboardBucketName:
+    Description: S3 bucket hosting the dashboard (deploy artifacts here).
+    Value: !Ref DashboardBucket
+    Export:
+      Name: !Sub "${AWS::StackName}-DashboardBucket"
+
+  DashboardDistributionId:
+    Description: CloudFront distribution id (for cache invalidations).
+    Value: !Ref DashboardDistribution
+    Export:
+      Name: !Sub "${AWS::StackName}-DashboardDistributionId"
+
+  TableName:
+    Description: DynamoDB single-table name.
+    Value: !Ref F1DataTable
+
+  RawBucketName:
+    Value: !Ref RawDataBucket
+
+  ProcessedBucketName:
+    Value: !Ref ProcessedDataBucket
