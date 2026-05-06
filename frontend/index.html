@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PitStop Analytics</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+    rel="stylesheet"
+  />
+  <link rel="stylesheet" href="./styles/main.css" />
+</head>
+<body>
+  <header class="site-header">
+    <div class="brand">
+      <span class="logo-mark"></span>
+      <h1>PitStop Analytics</h1>
+    </div>
+    <nav class="primary-nav">
+      <a href="#/season" data-route="season">Season</a>
+      <a href="#/race" data-route="race">Race</a>
+      <a href="#/standings" data-route="standings">Standings</a>
+      <a href="#/team" data-route="team">Team Intel</a>
+      <a href="#/circuit" data-route="circuit">Circuit</a>
+      <a href="#/predictions" data-route="predictions">Predictions</a>
+      <a href="#/championship" data-route="championship">Title Sim</a>
+    </nav>
+  </header>
+
+  <main id="app">
+    <section class="loader">
+      <div class="spinner"></div>
+      <p>Loading…</p>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <p>Data: FastF1 · Ergast (jolpi.ca mirror) · Last updated <span id="last-updated">—</span></p>
+  </footer>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.5/dist/chart.umd.min.js"></script>
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>

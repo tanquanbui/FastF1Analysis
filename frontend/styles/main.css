@@ -1,0 +1,406 @@
+:root {
+  --bg: #0a0a0f;
+  --bg-elev: #14141c;
+  --bg-card: #1a1a24;
+  --border: #2a2a38;
+  --text: #f4f4f8;
+  --text-muted: #8e8e9c;
+  --accent: #e8002d;
+  --accent-soft: rgba(232, 0, 45, 0.16);
+  --accent-glow: rgba(232, 0, 45, 0.45);
+  --positive: #2dd4bf;
+  --warning: #f5a524;
+  --negative: #f43f5e;
+  --radius: 12px;
+  --radius-sm: 6px;
+  --shadow-card: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-feature-settings: "ss01", "cv11";
+  min-height: 100vh;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: var(--text);
+  text-decoration: none;
+  transition: color 0.15s ease, opacity 0.15s ease;
+}
+a:hover {
+  color: var(--accent);
+}
+
+/* ---------- header / nav ---------- */
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 32px;
+  padding: 16px 32px;
+  background: rgba(10, 10, 15, 0.85);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.brand h1 {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.logo-mark {
+  width: 14px;
+  height: 14px;
+  border-radius: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 16px var(--accent-glow);
+}
+
+.primary-nav {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.primary-nav a {
+  padding: 8px 14px;
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-muted);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.primary-nav a.is-active,
+.primary-nav a:hover {
+  color: var(--text);
+  background: var(--bg-card);
+}
+
+/* ---------- main ---------- */
+main {
+  padding: 32px;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.page-title {
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin-bottom: 4px;
+}
+
+.page-subtitle {
+  color: var(--text-muted);
+  font-size: 14px;
+  margin-bottom: 24px;
+}
+
+.toolbar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 24px;
+  flex-wrap: wrap;
+}
+
+.toolbar select,
+.toolbar input {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: 14px;
+  min-width: 120px;
+}
+
+.toolbar select:focus,
+.toolbar input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.toolbar label {
+  font-size: 12px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* ---------- cards / grids ---------- */
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  box-shadow: var(--shadow-card);
+}
+
+.card h2 {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+
+.card h3 {
+  font-size: 13px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 8px;
+}
+
+.grid {
+  display: grid;
+  gap: 16px;
+}
+
+.grid.cols-3 {
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+}
+
+.grid.cols-2 {
+  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+}
+
+.grid.cols-stats {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+/* ---------- race calendar cards ---------- */
+.race-card {
+  cursor: pointer;
+  transition: transform 0.15s ease, border-color 0.15s ease;
+}
+.race-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--accent);
+}
+
+.race-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+
+.race-card .round {
+  font-size: 11px;
+  color: var(--text-muted);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.race-card .name {
+  font-size: 18px;
+  font-weight: 600;
+  margin-top: 2px;
+}
+
+.race-card .podium {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.race-card .podium-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.race-card .podium-row .pos {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--bg-elev);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+}
+
+.race-card .podium-row .pos.p1 { background: gold; color: #1a1a24; }
+.race-card .podium-row .pos.p2 { background: silver; color: #1a1a24; }
+.race-card .podium-row .pos.p3 { background: #cd7f32; color: #fff; }
+
+/* ---------- tables ---------- */
+.results-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.results-table th,
+.results-table td {
+  padding: 10px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+.results-table th {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.results-table tr:hover td {
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.results-table .pos-cell {
+  width: 40px;
+  font-weight: 600;
+}
+
+.tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.tag.team-RBR { background: #1e3a8a; color: #fff; }
+.tag.team-MCL { background: #ff8000; color: #1a1a24; }
+.tag.team-FER { background: #dc0000; color: #fff; }
+.tag.team-MER { background: #00d2be; color: #1a1a24; }
+.tag.team-AST { background: #006f62; color: #fff; }
+.tag.team-ALP { background: #0090ff; color: #fff; }
+.tag.team-WIL { background: #005aff; color: #fff; }
+.tag.team-RB  { background: #6692ff; color: #1a1a24; }
+.tag.team-SAU { background: #52e252; color: #1a1a24; }
+.tag.team-HAA { background: #b6babd; color: #1a1a24; }
+
+/* ---------- charts ---------- */
+.chart-container {
+  position: relative;
+  height: 360px;
+}
+
+.chart-container canvas {
+  max-width: 100%;
+}
+
+/* ---------- prediction / fingerprint specifics ---------- */
+.dimension-bar {
+  display: grid;
+  grid-template-columns: 180px 1fr 50px;
+  gap: 12px;
+  align-items: center;
+  padding: 6px 0;
+}
+.dimension-bar .label { font-size: 13px; color: var(--text-muted); }
+.dimension-bar .track {
+  height: 6px;
+  background: var(--bg-elev);
+  border-radius: 999px;
+  overflow: hidden;
+  position: relative;
+}
+.dimension-bar .fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), #ff5e7a);
+  border-radius: 999px;
+}
+.dimension-bar .value { font-size: 13px; font-variant-numeric: tabular-nums; text-align: right; }
+
+.verdict {
+  margin-top: 16px;
+  padding: 12px 14px;
+  border-left: 3px solid var(--accent);
+  background: var(--accent-soft);
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+.confidence-band {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.confidence-band .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--positive);
+}
+.confidence-band.med .dot { background: var(--warning); }
+.confidence-band.low .dot { background: var(--negative); }
+
+/* ---------- loader / errors ---------- */
+.loader {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 50vh;
+  gap: 14px;
+  color: var(--text-muted);
+}
+.spinner {
+  width: 28px;
+  height: 28px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.error {
+  padding: 16px 20px;
+  border: 1px solid var(--negative);
+  border-radius: var(--radius-sm);
+  background: rgba(244, 63, 94, 0.08);
+  color: var(--text);
+}
+
+/* ---------- footer ---------- */
+.site-footer {
+  padding: 24px 32px 40px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 12px;
+  border-top: 1px solid var(--border);
+  margin-top: 80px;
+}
+
+@media (max-width: 720px) {
+  main { padding: 16px; }
+  .site-header { flex-direction: column; align-items: flex-start; gap: 12px; padding: 12px 16px; }
+  .primary-nav { width: 100%; overflow-x: auto; }
+}
