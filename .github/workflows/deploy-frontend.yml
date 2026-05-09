@@ -1,0 +1,49 @@
+name: Deploy frontend
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "frontend/**"
+      - ".github/workflows/deploy-frontend.yml"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    name: Sync to S3 + CloudFront invalidation
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ap-southeast-2
+
+      - name: Resolve stack outputs
+        id: outputs
+        run: |
+          BUCKET=$(aws cloudformation describe-stacks --stack-name pitstop-analytics \
+            --query "Stacks[0].Outputs[?OutputKey=='DashboardBucketName'].OutputValue" --output text)
+          DIST=$(aws cloudformation describe-stacks --stack-name pitstop-analytics \
+            --query "Stacks[0].Outputs[?OutputKey=='DashboardDistributionId'].OutputValue" --output text)
+          echo "bucket=$BUCKET" >> $GITHUB_OUTPUT
+          echo "dist=$DIST" >> $GITHUB_OUTPUT
+
+      - name: Sync to S3
+        run: |
+          aws s3 sync frontend/ s3://${{ steps.outputs.outputs.bucket }}/ \
+            --delete \
+            --exclude "*.md" \
+            --exclude ".*"
+
+      - name: Invalidate CloudFront cache
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id ${{ steps.outputs.outputs.dist }} \
+            --paths "/*"
