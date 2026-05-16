@@ -1,0 +1,17 @@
+[
+  {"PK": "RACE#2024#1", "SK": "RESULT#VER", "DriverCode": "VER", "TeamCode": "RBR", "Position": 1, "Points": 26},
+  {"PK": "RACE#2024#1", "SK": "RESULT#PER", "DriverCode": "PER", "TeamCode": "RBR", "Position": 2, "Points": 18},
+  {"PK": "RACE#2024#1", "SK": "RESULT#SAI", "DriverCode": "SAI", "TeamCode": "FER", "Position": 3, "Points": 15},
+
+  {"PK": "RACE#2024#2", "SK": "RESULT#VER", "DriverCode": "VER", "TeamCode": "RBR", "Position": 1, "Points": 25},
+  {"PK": "RACE#2024#2", "SK": "RESULT#PER", "DriverCode": "PER", "TeamCode": "RBR", "Position": 2, "Points": 18},
+  {"PK": "RACE#2024#2", "SK": "RESULT#LEC", "DriverCode": "LEC", "TeamCode": "FER", "Position": 4, "Points": 12},
+
+  {"PK": "RACE#2024#3", "SK": "RESULT#VER", "DriverCode": "VER", "TeamCode": "RBR", "Position": 1, "Points": 25},
+  {"PK": "RACE#2024#3", "SK": "RESULT#NOR", "DriverCode": "NOR", "TeamCode": "MCL", "Position": 2, "Points": 18},
+  {"PK": "RACE#2024#3", "SK": "RESULT#LEC", "DriverCode": "LEC", "TeamCode": "FER", "Position": 3, "Points": 15},
+
+  {"PK": "RACE#2024#4", "SK": "RESULT#NOR", "DriverCode": "NOR", "TeamCode": "MCL", "Position": 1, "Points": 25},
+  {"PK": "RACE#2024#4", "SK": "RESULT#VER", "DriverCode": "VER", "TeamCode": "RBR", "Position": 2, "Points": 18},
+  {"PK": "RACE#2024#4", "SK": "RESULT#LEC", "DriverCode": "LEC", "TeamCode": "FER", "Position": 3, "Points": 15}
+]

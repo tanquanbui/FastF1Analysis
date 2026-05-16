@@ -1,0 +1,22 @@
+[
+  {"PK": "STANDINGS#2024#5", "SK": "CONSTRUCTOR#RBR", "TeamCode": "RBR", "ConstructorName": "Red Bull Racing", "Position": 1, "Points": 195, "Wins": 4, "TrackKey": "season"},
+  {"PK": "STANDINGS#2024#5", "SK": "CONSTRUCTOR#MCL", "TeamCode": "MCL", "ConstructorName": "McLaren", "Position": 2, "Points": 156, "Wins": 1, "TrackKey": "season"},
+  {"PK": "STANDINGS#2024#5", "SK": "CONSTRUCTOR#FER", "TeamCode": "FER", "ConstructorName": "Ferrari", "Position": 3, "Points": 142, "Wins": 0, "TrackKey": "season"},
+  {"PK": "STANDINGS#2024#5", "SK": "CONSTRUCTOR#MER", "TeamCode": "MER", "ConstructorName": "Mercedes", "Position": 4, "Points": 88, "Wins": 0, "TrackKey": "season"},
+  {"PK": "STANDINGS#2024#5", "SK": "CONSTRUCTOR#AST", "TeamCode": "AST", "ConstructorName": "Aston Martin", "Position": 5, "Points": 38, "Wins": 0, "TrackKey": "season"},
+  {"PK": "STANDINGS#2024#5", "SK": "CONSTRUCTOR#RB", "TeamCode": "RB", "ConstructorName": "Racing Bulls", "Position": 6, "Points": 22, "Wins": 0, "TrackKey": "season"},
+  {"PK": "STANDINGS#2024#5", "SK": "CONSTRUCTOR#HAA", "TeamCode": "HAA", "ConstructorName": "Haas", "Position": 7, "Points": 16, "Wins": 0, "TrackKey": "season"},
+  {"PK": "STANDINGS#2024#5", "SK": "CONSTRUCTOR#WIL", "TeamCode": "WIL", "ConstructorName": "Williams", "Position": 8, "Points": 4, "Wins": 0, "TrackKey": "season"},
+  {"PK": "STANDINGS#2024#5", "SK": "CONSTRUCTOR#ALP", "TeamCode": "ALP", "ConstructorName": "Alpine", "Position": 9, "Points": 2, "Wins": 0, "TrackKey": "season"},
+  {"PK": "STANDINGS#2024#5", "SK": "CONSTRUCTOR#SAU", "TeamCode": "SAU", "ConstructorName": "Kick Sauber", "Position": 10, "Points": 0, "Wins": 0, "TrackKey": "season"},
+  {"PK": "STANDINGS#2024#5", "SK": "DRIVER#VER", "DriverCode": "VER", "DriverName": "Max Verstappen", "TeamCode": "RBR", "Position": 1, "Points": 119, "Wins": 4, "RaceKey": "2024#5"},
+  {"PK": "STANDINGS#2024#5", "SK": "DRIVER#PER", "DriverCode": "PER", "DriverName": "Sergio Perez", "TeamCode": "RBR", "Position": 2, "Points": 76, "Wins": 0, "RaceKey": "2024#5"},
+  {"PK": "STANDINGS#2024#5", "SK": "DRIVER#LEC", "DriverCode": "LEC", "DriverName": "Charles Leclerc", "TeamCode": "FER", "Position": 3, "Points": 71, "Wins": 0, "RaceKey": "2024#5"},
+  {"PK": "STANDINGS#2024#5", "SK": "DRIVER#NOR", "DriverCode": "NOR", "DriverName": "Lando Norris", "TeamCode": "MCL", "Position": 4, "Points": 64, "Wins": 1, "RaceKey": "2024#5"},
+  {"PK": "STANDINGS#2024#5", "SK": "DRIVER#SAI", "DriverCode": "SAI", "DriverName": "Carlos Sainz", "TeamCode": "FER", "Position": 5, "Points": 60, "Wins": 0, "RaceKey": "2024#5"},
+  {"PK": "STANDINGS#2024#5", "SK": "DRIVER#PIA", "DriverCode": "PIA", "DriverName": "Oscar Piastri", "TeamCode": "MCL", "Position": 6, "Points": 41, "Wins": 0, "RaceKey": "2024#5"},
+  {"PK": "STANDINGS#2024#5", "SK": "DRIVER#RUS", "DriverCode": "RUS", "DriverName": "George Russell", "TeamCode": "MER", "Position": 7, "Points": 39, "Wins": 0, "RaceKey": "2024#5"},
+  {"PK": "STANDINGS#2024#5", "SK": "DRIVER#HAM", "DriverCode": "HAM", "DriverName": "Lewis Hamilton", "TeamCode": "MER", "Position": 8, "Points": 31, "Wins": 0, "RaceKey": "2024#5"},
+  {"PK": "STANDINGS#2024#5", "SK": "DRIVER#ALO", "DriverCode": "ALO", "DriverName": "Fernando Alonso", "TeamCode": "AST", "Position": 9, "Points": 24, "Wins": 0, "RaceKey": "2024#5"},
+  {"PK": "STANDINGS#2024#5", "SK": "DRIVER#STR", "DriverCode": "STR", "DriverName": "Lance Stroll", "TeamCode": "AST", "Position": 10, "Points": 14, "Wins": 0, "RaceKey": "2024#5"}
+]
