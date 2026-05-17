@@ -281,14 +281,36 @@ async function pagePredictions(year = config.currentSeason, round) {
   setLoading("Loading race predictions…");
   updateNavActive("predictions");
   try {
-    // If no round given, use next-after-current; the API can also be queried with `latest`
-    const r = round || 1;
+    // Default to the upcoming-race round we generated reports for.
+    const r = round || 25;
     const data = await api.getPredictions(year, r);
+    const reports = data.team_reports || [];
+
+    if (reports.length === 0) {
+      app.innerHTML = `
+        <h1 class="page-title">Race Predictions</h1>
+        <p class="page-subtitle">No predictions yet for ${year} round ${r}.</p>
+        <div class="card section-row">
+          <p style="color:var(--text-muted)">
+            Run the predictor Lambda for a future round to generate per-team
+            reports here.
+          </p>
+        </div>`;
+      return;
+    }
+
+    // Sort by predicted finishing position so the favourites come first.
+    reports.sort(
+      (a, b) =>
+        (a.prediction?.race?.predicted_position ?? 99) -
+        (b.prediction?.race?.predicted_position ?? 99),
+    );
+
     app.innerHTML = `
       <h1 class="page-title">Race Predictions · ${data.race_name || `Round ${r}`}</h1>
-      <p class="page-subtitle">${data.team_reports?.length || 0} teams analysed</p>
+      <p class="page-subtitle">${reports.length} teams analysed · sorted by predicted finish</p>
       <div class="grid cols-2">
-        ${(data.team_reports || []).map(renderPredictionCard).join("")}
+        ${reports.map(renderPredictionCard).join("")}
       </div>
     `;
   } catch (e) {

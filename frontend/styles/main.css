@@ -404,7 +404,108 @@ main {
   font-weight: 600;
 }
 
-/* ---------- prediction / fingerprint specifics ---------- */
+/* ---------- prediction card ---------- */
+.prediction-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.prediction-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.prediction-team {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+.prediction-sub {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.prediction-headline {
+  display: flex;
+  gap: 16px;
+  text-align: right;
+}
+
+.prediction-headline .metric {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.prediction-headline .metric-value {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--accent);
+  line-height: 1;
+}
+
+.prediction-headline .metric-label {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-top: 2px;
+}
+
+.prediction-summary {
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.reasoning {
+  color: var(--text-muted);
+  font-size: 13px;
+  margin-top: -8px;
+}
+
+.muted-h3 {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  margin: 6px 0 6px;
+}
+
+.scenario-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.scenario-table th,
+.scenario-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+
+.scenario-table th {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.verdict.warn {
+  border-left-color: var(--warning);
+  background: rgba(245, 165, 36, 0.12);
+}
+
+/* ---------- fingerprint dimension bars ---------- */
 .dimension-bar {
   display: grid;
   grid-template-columns: 180px 1fr 50px;
