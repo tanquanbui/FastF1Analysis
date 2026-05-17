@@ -5,8 +5,13 @@ pandas==2.2.3
 pyarrow==18.0.0
 requests==2.32.3
 tenacity==9.0.0
-# Pin transitive deps that fastf1 pulls — prebuilt wheels available
-# for these versions, avoiding source builds on the SAM container (GCC 7.3).
+# Pin everything fastf1 pulls transitively to versions with prebuilt
+# manylinux wheels for cp311 — Lambda's base image has GCC 7.3.1 and
+# can't compile newer C extensions from source.
 matplotlib==3.9.2
+contourpy==1.2.1
+kiwisolver==1.4.7
+pillow==10.4.0
+fonttools==4.55.0
 scipy==1.14.1
 rapidfuzz==3.10.1
