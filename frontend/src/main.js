@@ -1,6 +1,9 @@
 import { config } from "./config.js";
 import { api } from "./api.js";
 import { renderLapTimesChart, renderRaceProgression } from "./charts/lapTimes.js";
+import { renderTrackMap } from "./charts/trackMap.js";
+import { renderQualifyingViewer } from "./charts/qualifying.js";
+import { CIRCUIT_BY_ROUND, TRACKS } from "./charts/tracks_data.js";
 import { renderTyreStrategyChart } from "./charts/tyreStrategy.js";
 import { renderSectorTimesChart } from "./charts/sectorTimes.js";
 import { renderConstructorStandingsChart, renderDriverStandingsChart } from "./charts/standings.js";
@@ -180,10 +183,30 @@ async function pageRace(year, round) {
         <h2>Sector breakdown</h2>
         <div class="chart-container chart-tall"><canvas id="sector-chart"></canvas></div>
       </section>
+
+      <section class="card section-row">
+        <h2>Circuit</h2>
+        <div id="track-map" class="track-map-container"></div>
+      </section>
+
+      <section class="card section-row">
+        <h2>Qualifying</h2>
+        <div id="qualifying-viewer" class="qual-container"></div>
+      </section>
     `;
     renderRaceProgression("lap-chart", data.laps || [], "position");
     renderTyreStrategyChart("tyre-chart", data.laps || []);
     renderSectorTimesChart("sector-chart", data.laps || []);
+
+    const circuitKey = CIRCUIT_BY_ROUND[Number(round)] || "monza";
+    renderTrackMap("track-map", circuitKey);
+
+    api.getQualifying(year, round)
+      .then((qd) => renderQualifyingViewer("qualifying-viewer", qd.qualifying || []))
+      .catch(() => {
+        document.getElementById("qualifying-viewer").innerHTML =
+          '<p style="color:var(--text-muted);padding:24px">Qualifying data hasn\'t been processed for this race yet.</p>';
+      });
 
     // View toggle for the race-progression chart.
     document.querySelectorAll("#progression-toggle button").forEach((btn) => {
@@ -257,23 +280,40 @@ async function pageTeam(code = "RBR") {
 }
 
 async function pageCircuit(key = "monaco") {
-  setLoading(`Loading ${key} analysis…`);
   updateNavActive("circuit");
+
+  const trackData = TRACKS[key] || TRACKS.monza;
+  const options = Object.entries(TRACKS)
+    .map(([k, t]) => `<option value="${k}" ${k === key ? "selected" : ""}>${t.name}</option>`)
+    .join("");
+
+  app.innerHTML = `
+    <h1 class="page-title">${trackData.name}</h1>
+    <p class="page-subtitle">${trackData.length_km} km · ${trackData.corners} corners · ${trackData.drs_zones} DRS zone(s) · ${trackData.direction}</p>
+    <div class="toolbar">
+      <label>Circuit
+        <select id="circuit-select">${options}</select>
+      </label>
+    </div>
+    <section class="card section-row">
+      <div id="track-map" class="track-map-container"></div>
+    </section>
+    <section class="card section-row">
+      <h2>Team compatibility at this circuit</h2>
+      <div class="chart-container" style="height:480px"><canvas id="track-matrix"></canvas></div>
+    </section>
+  `;
+
+  document.getElementById("circuit-select").addEventListener("change", (e) => {
+    navigate(`/circuit/${e.target.value}`);
+  });
+
+  renderTrackMap("track-map", key);
   try {
     const data = await api.getCircuitTeams(key);
-    app.innerHTML = `
-      <h1 class="page-title">${data.circuit_name || key.toUpperCase()}</h1>
-      <p class="page-subtitle">Team compatibility ranked</p>
-      <div class="grid">
-        <div class="card">
-          <h2>Compatibility heatmap</h2>
-          <div class="chart-container" style="height:480px"><canvas id="track-matrix"></canvas></div>
-        </div>
-      </div>
-    `;
     renderTrackMatrix("track-matrix", data.teams || []);
-  } catch (e) {
-    setError(e);
+  } catch {
+    // Compatibility data optional.
   }
 }
 

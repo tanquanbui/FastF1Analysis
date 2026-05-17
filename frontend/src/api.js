@@ -17,6 +17,7 @@ export const api = {
   // Phase 1
   listSeasonRaces: (year) => request(`/races/${year}`),
   getRaceDetail: (year, round) => request(`/races/${year}/${round}`),
+  getQualifying: (year, round) => request(`/qualifying/${year}/${round}`),
   getDriverProfile: (code) => request(`/drivers/${code}`),
   getTeamProfile: (code) => request(`/teams/${code}`),
   getStandings: (year, round) => request(`/standings/${year}/${round}`),

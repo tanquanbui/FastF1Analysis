@@ -41,6 +41,7 @@ from routes import (  # noqa: E402,F401
     drivers,
     fingerprints,
     predictions,
+    qualifying,
     races,
     standings,
     teams,

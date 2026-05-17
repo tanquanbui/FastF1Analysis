@@ -709,6 +709,185 @@ main {
   color: var(--text-muted);
 }
 
+/* ---------- track map ---------- */
+.track-map-container {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.track-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-bottom: 8px;
+}
+
+.track-name {
+  margin: 0;
+  font-size: 18px;
+}
+
+.track-legend {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.track-legend .dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  vertical-align: -1px;
+  margin-right: 5px;
+}
+
+.track-svg {
+  width: 100%;
+  height: auto;
+  max-height: 560px;
+  background: var(--bg-elev);
+  border-radius: var(--radius-sm);
+}
+
+.track-notes {
+  color: var(--text-muted);
+  font-size: 13px;
+  margin: 8px 0 0;
+}
+
+/* ---------- qualifying viewer ---------- */
+.qual-container {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.qual-tabs {
+  display: inline-flex;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 2px;
+  align-self: flex-start;
+}
+
+.qual-tab {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  padding: 8px 16px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.qual-tab.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.qual-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.qual-row {
+  display: grid;
+  grid-template-columns: 40px 1fr 100px 1fr;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+  background: var(--bg-elev);
+  border-radius: 6px;
+  font-size: 13px;
+  transition: background 0.15s ease;
+}
+
+.qual-row:hover {
+  background: rgba(232, 0, 45, 0.06);
+}
+
+.qual-row.eliminated {
+  opacity: 0.45;
+}
+
+.qual-pos {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.qual-driver {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.qual-driver .flag {
+  font-size: 16px;
+}
+
+.qual-driver .driver-name {
+  font-weight: 600;
+}
+
+.qual-team-pill {
+  display: inline-block;
+  width: 3px;
+  height: 14px;
+  border-radius: 2px;
+  margin-left: 10px;
+}
+
+.qual-team-name {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.qual-time {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  text-align: right;
+}
+
+.qual-gap-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.qual-gap-bar {
+  flex: 1;
+  height: 6px;
+  background: var(--bg-card);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.qual-gap-bar span {
+  display: block;
+  height: 100%;
+}
+
+.qual-gap-text {
+  width: 70px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
 /* ---------- fingerprint dimension bars ---------- */
 .dimension-bar {
   display: grid;
