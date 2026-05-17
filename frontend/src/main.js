@@ -387,28 +387,33 @@ async function renderPredictorComparison(year, round) {
         (b.prediction?.race?.predicted_position ?? 99),
     );
 
-    // Build the actual finishing order — group results by team, take each team's
-    // best finisher.
-    const teamBest = new Map();
-    for (const r of actual.results || []) {
-      const code = r.TeamCode;
-      const pos = r.Position;
-      if (!code || pos == null) continue;
-      if (!teamBest.has(code) || pos < teamBest.get(code).Position) {
-        teamBest.set(code, r);
-      }
-    }
-    const actualRanking = Array.from(teamBest.values()).sort(
-      (a, b) => (a.Position ?? 99) - (b.Position ?? 99),
-    );
+    // Actual full top-10 finishing order — both drivers of a team appear if
+    // they both finished in the top 10.
+    const actualRanking = (actual.results || [])
+      .filter((r) => r.Position != null)
+      .sort((a, b) => (a.Position ?? 99) - (b.Position ?? 99));
 
-    // Accuracy metrics.
+    // Accuracy: predicted team rank vs the team rank derived from the
+    // *first* time a team appears in the actual results (i.e. their best
+    // driver). This keeps the comparison team-level since predictions are
+    // team-level.
+    const teamBestRank = new Map();
+    actualRanking.forEach((r) => {
+      if (r.TeamCode && !teamBestRank.has(r.TeamCode)) {
+        teamBestRank.set(r.TeamCode, teamBestRank.size + 1);
+      }
+    });
     const predRank = predicted.map((p) => p.team_code);
-    const actualRank = actualRanking.map((r) => r.TeamCode);
-    const top3Hits = predRank.slice(0, 3).filter((t) => actualRank.slice(0, 3).includes(t)).length;
-    const winnerHit = predRank[0] === actualRank[0];
+    const actualTeamRank = Array.from(teamBestRank.keys());
+    const top3Hits = predRank.slice(0, 3).filter((t) => actualTeamRank.slice(0, 3).includes(t)).length;
+    const winnerHit = predRank[0] === actualTeamRank[0];
     const meanAbsErr = mean(
-      predRank.map((team, i) => Math.abs(i - actualRank.indexOf(team))).filter((v) => Number.isFinite(v)),
+      predRank
+        .map((team, i) => {
+          const idx = actualTeamRank.indexOf(team);
+          return idx >= 0 ? Math.abs(i - idx) : null;
+        })
+        .filter((v) => v != null),
     );
 
     out.innerHTML = `
@@ -428,13 +433,13 @@ async function renderPredictorComparison(year, round) {
         </section>
         <section class="card section-row">
           <h2>Actual</h2>
-          <p class="muted-h3">${CALENDAR_2024[round] || `Round ${round}`} ${year} result</p>
+          <p class="muted-h3">${CALENDAR_2024[round] || `Round ${round}`} ${year} — top 10 finishers</p>
           <table class="results-table predictor-table">
-            <thead><tr><th>Rank</th><th>Team</th><th>Best finisher</th></tr></thead>
+            <thead><tr><th>Pos</th><th>Driver</th><th>Team</th></tr></thead>
             <tbody>
               ${actualRanking
                 .slice(0, 10)
-                .map((r, i) => actualRow(i + 1, r))
+                .map((r) => actualRow(r))
                 .join("")}
             </tbody>
           </table>
@@ -478,21 +483,20 @@ function predictorRow(rank, code, confidence) {
     </tr>`;
 }
 
-function actualRow(rank, r) {
+function actualRow(r) {
   const flag = flagFor(config.driverCountry[r.DriverCode]);
   const team = config.teamNames[r.TeamCode] || r.TeamCode;
   const color = config.teamColors[r.TeamCode] || "#8e8e9c";
   return `
     <tr>
-      <td class="pos-cell">${rank}</td>
-      <td>
-        <span class="team-swatch" style="background:${color}"></span>
-        <span class="team-name">${team}</span>
-      </td>
+      <td class="pos-cell">${r.Position ?? "—"}</td>
       <td class="driver-cell">
         <span class="flag">${flag}</span>
         <span class="driver-name">${r.DriverName || r.DriverCode}</span>
-        <span class="driver-pos">P${r.Position ?? "?"}</span>
+      </td>
+      <td>
+        <span class="team-swatch" style="background:${color}"></span>
+        <span class="team-name">${team}</span>
       </td>
     </tr>`;
 }
