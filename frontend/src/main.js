@@ -33,50 +33,75 @@ function teamTag(code) {
 
 // ---------- pages ----------
 async function pageSeason(year = config.currentSeason) {
-  setLoading(`Loading ${year} season…`);
   updateNavActive("season");
+
+  // Render the page skeleton immediately with a clear loading state so the
+  // user knows something is happening — server-side parallel fetch usually
+  // returns in <500ms but we want to be polite about long tails.
+  app.innerHTML = `
+    <h1 class="page-title">${year} Season</h1>
+    <p class="page-subtitle" id="season-status">
+      <span class="spinner" style="width:14px;height:14px;display:inline-block;vertical-align:-2px;margin-right:6px"></span>
+      Fetching season data…
+    </p>
+    <div class="toolbar">
+      <label>Year <select id="year-select">${seasonOptions(year)}</select></label>
+    </div>
+    <div class="grid cols-3" id="race-grid"></div>
+  `;
+
+  document.getElementById("year-select").addEventListener("change", (e) => {
+    navigate(`/season/${e.target.value}`);
+  });
+
+  const status = document.getElementById("season-status");
+  const grid = document.getElementById("race-grid");
+
   try {
     const data = await api.listSeasonRaces(year);
-    const cards = (data.races || [])
-      .map((race) => {
-        const podium = (race.podium || [])
-          .map(
-            (p) => `
-              <div class="podium-row">
-                <span class="pos p${p.position}">${p.position}</span>
-                <span>${p.driver_code || "—"}</span>
-                ${p.team_code ? teamTag(p.team_code) : ""}
-                <span style="margin-left:auto;color:var(--text-muted)">${p.points ?? ""} pts</span>
-              </div>`,
-          )
-          .join("");
-        return `
-          <article class="card race-card" data-round="${race.round}">
-            <div class="race-card-header">
-              <div>
-                <p class="round">Round ${race.round}</p>
-                <p class="name">Round ${race.round}</p>
-              </div>
-            </div>
-            <div class="podium">${podium || '<p style="color:var(--text-muted);font-size:13px">No data yet</p>'}</div>
-          </article>`;
-      })
-      .join("");
+    const races = data.races || [];
 
-    app.innerHTML = `
-      <h1 class="page-title">${year} Season</h1>
-      <p class="page-subtitle">${data.races?.length || 0} rounds ingested</p>
-      <div class="toolbar">
-        <label>Year <select id="year-select">${seasonOptions(year)}</select></label>
-      </div>
-      <div class="grid cols-3">${cards}</div>
-    `;
-    document.getElementById("year-select").addEventListener("change", (e) => {
-      navigate(`/season/${e.target.value}`);
-    });
-    document.querySelectorAll(".race-card").forEach((card) => {
+    if (races.length === 0) {
+      status.innerHTML = `<span style="color:var(--text-muted)">No data ingested for ${year} yet.</span>`;
+      return;
+    }
+
+    status.innerHTML = `<span style="color:var(--text-muted)">${races.length} rounds with data</span>`;
+
+    // Append cards one at a time with a tiny stagger so big seasons feel
+    // smooth instead of slamming into the DOM.
+    for (const [i, race] of races.entries()) {
+      const podium = (race.podium || [])
+        .map(
+          (p) => `
+            <div class="podium-row">
+              <span class="pos p${p.position}">${p.position}</span>
+              <span>${p.driver_code || "—"}</span>
+              ${p.team_code ? teamTag(p.team_code) : ""}
+              <span style="margin-left:auto;color:var(--text-muted)">${p.points ?? ""} pts</span>
+            </div>`,
+        )
+        .join("");
+
+      const card = document.createElement("article");
+      card.className = "card race-card";
+      card.dataset.round = race.round;
+      card.style.opacity = "0";
+      card.style.transition = "opacity 0.25s ease";
+      card.innerHTML = `
+        <div class="race-card-header">
+          <div>
+            <p class="round">Round ${race.round}</p>
+            <p class="name">Round ${race.round}</p>
+          </div>
+        </div>
+        <div class="podium">${podium || '<p style="color:var(--text-muted);font-size:13px">No podium data</p>'}</div>`;
       card.addEventListener("click", () => navigate(`/race/${year}/${card.dataset.round}`));
-    });
+      grid.appendChild(card);
+
+      // Stagger fade-in.
+      setTimeout(() => (card.style.opacity = "1"), Math.min(i * 20, 600));
+    }
   } catch (e) {
     setError(e);
   }
