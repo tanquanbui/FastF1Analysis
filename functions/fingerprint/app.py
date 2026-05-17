@@ -107,23 +107,54 @@ def _team_race_history(team_code: str, year: int, round_number: int) -> list[dic
 
 
 def _team_metrics_to_features(item: dict[str, Any]) -> dict[str, Any]:
-    """Coerce a TEAM_METRICS DynamoDB item into the feature dict the
-    fingerprint engineer expects.
+    """Coerce a TEAM_METRICS item into the feature dict the fingerprint
+    engineer expects.
+
+    The processor's metrics module writes points, lap times, pit stops —
+    enough to derive proxies for every dimension except wet weather (we
+    don't track that yet). We expose each metric in its natural direction
+    so the percentile_rank() in feature_engineer can do its job.
     """
     track_key = item.get("TrackKey") or ""
     year, rnd = track_key.split("#") if "#" in track_key else (None, None)
+
+    def _f(key):
+        v = item.get(key)
+        return float(v) if v is not None else None
+
+    best_lap = _f("BestLapSeconds")
+    avg_pace = _f("AvgRacePaceSeconds")
+    median_pace = _f("MedianRacePaceSeconds")
+    pace_stddev = _f("LapPaceStdDev")
+    pit_avg = _f("AvgPitDurationSeconds")
+    points = _f("PointsScored") or 0.0
+    drivers_finished = item.get("DriversFinished") or 0
+    try:
+        drivers_finished = int(drivers_finished)
+    except (TypeError, ValueError):
+        drivers_finished = 0
+
     return {
         "year": int(year) if year else None,
         "race_round": int(rnd) if rnd else None,
-        "best_speed_st": float(item["BestSpeedST"]) if item.get("BestSpeedST") is not None else None,
-        "high_speed_sector_gap": float(item["HighSpeedSectorGap"]) if item.get("HighSpeedSectorGap") is not None else None,
-        "low_speed_sector_gap": float(item["LowSpeedSectorGap"]) if item.get("LowSpeedSectorGap") is not None else None,
-        "tyre_deg_rate": float(item["AvgTyreDegRate"]) if item.get("AvgTyreDegRate") is not None else None,
-        "qualifying_gap_to_pole": float(item["QualifyingGapToPole"]) if item.get("QualifyingGapToPole") is not None else None,
-        "race_finish_delta_from_grid": int(item["GridToFinishDelta"]) if item.get("GridToFinishDelta") is not None else None,
-        "pit_consistency": float(item["LapPaceStdDev"]) if item.get("LapPaceStdDev") is not None else None,
-        "wet_race": bool(item.get("WetRace", False)),
-        "wet_finishing_rank": int(item["WetFinishingRank"]) if item.get("WetFinishingRank") is not None else None,
+        # 1. Straight-line speed proxy: faster best lap → higher score.
+        #    (We negate so 'higher is better' matches the percentile direction.)
+        "best_speed_st": -best_lap if best_lap is not None else None,
+        # 2. High-speed cornering: faster avg race pace = better aero platform.
+        "high_speed_sector_gap": avg_pace,  # lower better
+        # 3. Low-speed cornering: median race pace (less skewed by safety car laps).
+        "low_speed_sector_gap": median_pace,  # lower better
+        # 4. Tyre management: lower lap-time variance = better tyre work.
+        "tyre_deg_rate": pace_stddev,  # lower better
+        # 5. Qualifying pace proxy: best single lap.
+        "qualifying_gap_to_pole": best_lap,  # lower better
+        # 6. Race pace conversion: how many points did we walk away with?
+        "race_finish_delta_from_grid": points + drivers_finished * 2,  # higher better
+        # 7. Strategy execution: faster average pit stop time.
+        "pit_consistency": pit_avg,  # lower better
+        # 8. Wet weather: no track-status data in team_metrics, default later.
+        "wet_race": False,
+        "wet_finishing_rank": None,
     }
 
 
