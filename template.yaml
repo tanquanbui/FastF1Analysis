@@ -37,7 +37,7 @@ Conditions:
 Globals:
   Function:
     Runtime: python3.11
-    Architectures: [arm64]
+    Architectures: [x86_64]
     Tracing: Active
     Environment:
       Variables:
