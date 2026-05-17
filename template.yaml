@@ -509,7 +509,7 @@ Resources:
                   - !GetAtt ModelsBucket.Arn
                   - !Sub "${ModelsBucket.Arn}/*"
       ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AmazonSageMakerFullAccess
+        - arn:aws:iam::aws:policy/AmazonSageMakerFullAccess
 
   # ---------- Phase 2: Predictor Lambda ----------
   PredictorFunction:
