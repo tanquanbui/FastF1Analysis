@@ -146,10 +146,25 @@ def get_pit_stop_data(year: int, round_number: int) -> list[dict[str, Any]]:
             "stop": int(p["stop"]),
             "lap": int(p["lap"]),
             "time_of_day": p.get("time"),
-            "duration_seconds": float(p["duration"]) if p.get("duration") else None,
+            "duration_seconds": _parse_duration(p.get("duration")),
         }
         for p in races[0].get("PitStops", [])
     ]
+
+
+def _parse_duration(value: str | None) -> float | None:
+    """Parse Ergast duration strings. Most look like ``23.456`` (seconds),
+    but slow stops or pit-lane-traffic timings come back as ``mm:ss.ms``.
+    """
+    if not value:
+        return None
+    try:
+        if ":" in value:
+            parts = value.split(":")
+            return round(int(parts[0]) * 60 + float(parts[1]), 3)
+        return float(value)
+    except (ValueError, IndexError):
+        return None
 
 
 def _normalise_result(raw: dict[str, Any]) -> dict[str, Any]:
