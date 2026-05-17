@@ -16,12 +16,94 @@ from transformers import normalise_team_code
 logger = logging.getLogger(__name__)
 
 
+def compute_race_flags(laps: pd.DataFrame, weather: dict[str, Any] | None) -> dict[str, Any]:
+    """Compute race-level flags from lap data and weather summary."""
+    flags: dict[str, Any] = {"WetRace": False, "SafetyCarLapPct": 0.0}
+    if weather and weather.get("is_wet"):
+        flags["WetRace"] = True
+    if not laps.empty and "TrackStatus" in laps.columns:
+        statuses = laps["TrackStatus"].astype(str)
+        non_green = statuses.apply(lambda s: any(c in s for c in "234567"))
+        if len(statuses) > 0:
+            flags["SafetyCarLapPct"] = round(float(non_green.mean()), 3)
+    return flags
+
+
+def compute_driver_race_metrics(
+    results: list[dict[str, Any]],
+    qualifying: list[dict[str, Any]],
+    year: int,
+    round_number: int,
+) -> list[dict[str, Any]]:
+    """One DRIVER_METRICS record per driver per race — feeds the driver-level
+    predictor. Combines the Ergast race result with the qualifying result.
+    """
+    from transformers import normalise_team_code  # local import to avoid cycle
+    quali_by_code = {q.get("driver_code"): q for q in qualifying if q.get("driver_code")}
+    items = []
+    for r in results:
+        code = r.get("driver_code") or r.get("driver_id", "").upper()[:3]
+        team_code = normalise_team_code(r.get("constructor_id", ""))
+        grid = int(r["grid"]) if r.get("grid") is not None else None
+        position = r.get("position")
+        finished = (r.get("status") == "Finished") or (r.get("status", "").startswith("+"))
+        items.append(
+            {
+                "PK": f"RACE#{year}#{round_number}",
+                "SK": f"DRIVER_METRICS#{code}",
+                "DriverCode": code,
+                "RaceKey": f"{year}#{round_number}",
+                "TeamCode": team_code,
+                "Grid": grid,
+                "Position": position,
+                "Points": r.get("points"),
+                "Status": r.get("status"),
+                "Finished": finished,
+                "GridToFinishDelta": (grid - position) if (grid and position) else None,
+                "QualifyingPosition": int(quali_by_code[code]["position"]) if code in quali_by_code else None,
+                "QualifyingGapToPole": (
+                    _gap_to_pole_qualifying(quali_by_code[code], qualifying)
+                    if code in quali_by_code else None
+                ),
+            }
+        )
+    return items
+
+
+def _gap_to_pole_qualifying(driver_q: dict[str, Any], all_q: list[dict[str, Any]]) -> float | None:
+    """Compute the driver's qualifying gap-to-pole in seconds."""
+    if not all_q:
+        return None
+    pole = all_q[0]
+    own_best = _qual_best_seconds(driver_q)
+    pole_best = _qual_best_seconds(pole)
+    if own_best is None or pole_best is None:
+        return None
+    return round(own_best - pole_best, 3)
+
+
+def _qual_best_seconds(q: dict[str, Any]) -> float | None:
+    for k in ("q3", "q2", "q1"):
+        t = q.get(k)
+        if not t:
+            continue
+        try:
+            if ":" in t:
+                m, s = t.split(":", 1)
+                return round(int(m) * 60 + float(s), 3)
+            return round(float(t), 3)
+        except (ValueError, TypeError):
+            continue
+    return None
+
+
 def compute_team_race_metrics(
     laps: pd.DataFrame,
     results: list[dict[str, Any]],
     pit_stops: list[dict[str, Any]],
     year: int,
     round_number: int,
+    weather: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """One TEAM_METRICS record per team per race.
 
@@ -71,6 +153,7 @@ def compute_team_race_metrics(
         if stop.get("duration_seconds"):
             by_team[team_code]["pit_stops"].append(stop["duration_seconds"])
 
+    flags = compute_race_flags(laps, weather)
     items = []
     for team_code, data in by_team.items():
         lap_arr = np.array(data["lap_times"]) if data["lap_times"] else np.array([])
@@ -93,6 +176,8 @@ def compute_team_race_metrics(
                 if data["pit_stops"] else None,
                 "FastestPitSeconds": round(float(min(data["pit_stops"])), 3)
                 if data["pit_stops"] else None,
+                "WetRace": flags["WetRace"],
+                "SafetyCarLapPct": flags["SafetyCarLapPct"],
             }
         )
     return items

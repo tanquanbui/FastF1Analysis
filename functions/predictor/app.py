@@ -1,12 +1,12 @@
-"""Predictor Lambda — Thursday pre-race analysis.
+"""Predictor Lambda — driver-level race forecaster.
 
-For each team competing in the upcoming round:
-  1. Read current fingerprint + last upgrade event from DynamoDB.
-  2. Look up the circuit profile and compute compatibility.
-  3. Build the feature row, run XGBoost inference for the bucket prediction.
-  4. Compose the structured report via report_builder.
-  5. Run the championship Monte Carlo once for the season-wide title probabilities.
-  6. Persist reports + season scenarios to DynamoDB.
+For every driver in the upcoming race we compute six signals (qualifying,
+historical at circuit, recent form, overtaking skill, reliability, track fit)
+and blend them into a 0-100 score. The team prediction is the position of the
+team's best-scoring driver.
+
+Event payload:
+    {"year": 2024, "round": 3, "circuit_key": "albert_park"}
 """
 from __future__ import annotations
 
@@ -19,11 +19,8 @@ from pathlib import Path
 from typing import Any
 
 import boto3
-import numpy as np
 from boto3.dynamodb.conditions import Key
 
-# `features`, `circuit_profiler`, `upgrade_detector` come from the shared
-# Lambda Layer mounted at /opt/python/. Local-only modules are at /var/task/.
 sys.path.insert(0, str(Path(__file__).parent))
 
 from championship_sim import simulate_championship  # noqa: E402
@@ -32,9 +29,7 @@ from circuit_profiler import (  # noqa: E402
     compute_track_compatibility,
     get_profile,
 )
-from features import TRAINING_FEATURES, build_feature_row  # noqa: E402
-from model_loader import load_latest_model  # noqa: E402
-from report_builder import build_team_race_report  # noqa: E402
+from scorer import score_driver  # noqa: E402
 from upgrade_detector import project_upgrade_impact  # noqa: E402
 
 logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
@@ -42,192 +37,222 @@ logger = logging.getLogger(__name__)
 
 dynamodb = boto3.resource("dynamodb")
 TABLE_NAME = os.environ["TABLE_NAME"]
-MODELS_BUCKET = os.environ["MODELS_BUCKET"]
+MODELS_BUCKET = os.environ.get("MODELS_BUCKET", "")
 table = dynamodb.Table(TABLE_NAME)
+
+RECENT_WINDOW = 5
+HISTORICAL_WINDOW_YEARS = 3
 
 
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     """Lambda entry point."""
     year = int(event.get("year") or date.today().year)
     round_number = int(event.get("round") or _next_round(year))
-    circuit_key = event.get("circuit_key") or _circuit_for_round(round_number)
-
+    circuit_key = event.get("circuit_key") or "monza"
     profile = get_profile(circuit_key) or {dim: 0.5 for dim in FINGERPRINT_DIMENSIONS}
     logger.info("predicting %s round %s circuit=%s", year, round_number, circuit_key)
 
-    try:
-        model = load_latest_model(MODELS_BUCKET)
-    except Exception:
-        logger.warning("model unavailable — falling back to compatibility-only predictions", exc_info=True)
-        model = None
+    # 1. Roster for this race — look up every driver that competed.
+    roster = _race_roster(year, round_number)
+    if not roster:
+        logger.warning("no roster found for %s-%s; backing off to standings", year, round_number)
+        roster = _roster_from_standings(year, round_number - 1)
+    if not roster:
+        return {"statusCode": 200, "body": {"year": year, "round": round_number, "drivers": 0}}
 
-    standings = _load_standings(year, round_number - 1)
-    team_reports: list[dict[str, Any]] = []
-    position_distributions: dict[str, dict[int, float]] = {}
+    # 2. Pre-compute per-team fingerprint × circuit profile for the track fit signal.
+    teams = sorted({d["team_code"] for d in roster})
+    track_fit_by_team = {
+        team: compute_track_compatibility(
+            _load_fingerprint(team, year, round_number - 1),
+            profile,
+        )["overall_score"]
+        for team in teams
+    }
 
-    teams = sorted({s["TeamCode"] for s in standings["constructors"] if s.get("TeamCode")})
-    for team_code in teams:
-        fingerprint = _load_fingerprint(team_code, year, round_number - 1)
-        compat = compute_track_compatibility(fingerprint, profile)
-        last_upgrade = _load_last_upgrade(team_code, year, round_number)
-        upgrade_impact = project_upgrade_impact(last_upgrade, profile) if last_upgrade else None
+    # 3. Quali results for this race, if available.
+    qualifying = {q["DriverCode"]: q for q in _load_qualifying(year, round_number)}
 
-        team_standings_row = next(
-            (s for s in standings["constructors"] if s["TeamCode"] == team_code),
-            None,
+    # 4. Score each driver.
+    driver_scores: list[dict[str, Any]] = []
+    for driver in roster:
+        code = driver["driver_code"]
+        team_code = driver["team_code"]
+        q_pos = qualifying.get(code, {}).get("Position")
+
+        # Historical positions at this same round in prior seasons.
+        hist_positions = _driver_positions_at_round(
+            code, round_number, year - HISTORICAL_WINDOW_YEARS, year - 1,
         )
-        championship_position = int(team_standings_row["Position"]) if team_standings_row else 10
-        championship_points_gap = _points_gap(standings["constructors"], team_code)
+        # Recent form — last 5 finishing positions this season.
+        recent_positions = _driver_recent_positions(code, year, round_number, RECENT_WINDOW)
+        # Grid → finish deltas over last 10 races (any year).
+        gain_history = _driver_grid_to_finish_history(code, year, round_number, lookback=10)
+        # DNF rate over last 10 races.
+        dnf_rate = _driver_dnf_rate(code, year, round_number, lookback=10)
 
-        feature_row = build_feature_row(
-            team_fingerprint=fingerprint,
-            circuit_profile=profile,
-            track_compatibility=compat["overall_score"],
-            recent_form={"avg_finishing_position_l3": 5, "avg_qualifying_position_l3": 5, "dnf_rate_l10": 0.05},
-            championship_ctx={
-                "position": championship_position,
-                "points_gap_to_leader": championship_points_gap,
-                "races_remaining": 24 - round_number,
-                "must_win_pressure": 1 if championship_position == 2 and championship_points_gap > 25 else 0,
+        score = score_driver(
+            qualifying_pos=int(q_pos) if q_pos is not None else None,
+            historical_positions=hist_positions,
+            recent_positions=recent_positions,
+            grid_to_finish_history=gain_history,
+            dnf_rate=dnf_rate,
+            track_fit_score=track_fit_by_team.get(team_code),
+            wet_likely=False,
+            wet_history_positions=None,
+            field_size=20,
+        )
+
+        driver_scores.append({
+            "driver_code": code,
+            "driver_name": driver.get("driver_name"),
+            "team_code": team_code,
+            "score_breakdown": score,
+            "qualifying_position": int(q_pos) if q_pos is not None else None,
+            "input_data": {
+                "historical_positions": hist_positions,
+                "recent_positions": recent_positions,
+                "grid_to_finish_history": gain_history,
+                "dnf_rate": round(dnf_rate, 3) if dnf_rate is not None else None,
+                "track_fit": round(track_fit_by_team.get(team_code, 0), 1),
             },
-            upgrade_ctx={
-                "races_since_last_upgrade": (round_number - (last_upgrade or {}).get("detected_at_race", -50)) if last_upgrade else 99,
-                "upgrade_dimension_delta_max": max(((last_upgrade or {}).get("delta") or {}).values(), default=0),
-            },
-            session_ctx={"practice_pace_rank": championship_position, "qualifying_position": championship_position},
-            weather_ctx={"rain_probability": 0.1, "expected_temperature": 25.0},
-        )
+        })
 
-        prediction = _model_predict(model, feature_row)
-        position_distributions.update(_distribution_from_bucket(prediction["bracket"], team_code, standings))
+    # 5. Rank by combined score.
+    driver_scores.sort(key=lambda d: -d["score_breakdown"]["combined"])
+    for idx, d in enumerate(driver_scores):
+        d["predicted_position"] = idx + 1
 
-        report = build_team_race_report(
-            team_code=team_code,
-            team_name=team_code,
-            upcoming_race={"name": f"Round {round_number}", "round": round_number, "year": year},
-            current_fingerprint=fingerprint,
-            compatibility=compat,
-            last_upgrade=last_upgrade,
-            upgrade_impact=upgrade_impact,
-            championship_position=championship_position,
-            championship_points_gap=championship_points_gap,
-            races_remaining=24 - round_number,
-            model_prediction=prediction,
-        )
-        team_reports.append(report)
-
-    # ----- Build a combined score per team from 3 real signals -----
-    # The fingerprint-only ranking gave RBR ~37 and ALP ~33 → not enough
-    # separation. We blend it with two history-based signals.
-    history_year = year - 1
-    recent_window = list(range(max(1, round_number - 5), round_number))
-
-    for report in team_reports:
-        team_code = report["team_code"]
-        compat = float(report.get("track_compatibility", {}).get("overall_score") or 0)
-
-        # 1. Historical points at this same round in prior season.
-        historical_pts = _avg_team_points([history_year], [round_number], team_code)
-        historical_score = _points_to_score(historical_pts)
-
-        # 2. Recent form — avg team points across the last 5 rounds this season.
-        recent_pts = _avg_team_points([year], recent_window, team_code)
-        recent_score = _points_to_score(recent_pts)
-
-        # 3. Track fit — already 0-100.
-        track_score = compat
-
-        # Weighted blend. If a signal is missing (== 0), redistribute weight.
-        weights = {
-            "historical": 0.45 if historical_pts > 0 else 0,
-            "recent": 0.35 if recent_pts > 0 else 0,
-            "track": 0.20,
-        }
-        total_w = sum(weights.values()) or 1
-        weights = {k: v / total_w for k, v in weights.items()}
-
-        combined = (
-            historical_score * weights["historical"]
-            + recent_score * weights["recent"]
-            + track_score * weights["track"]
-        )
-
-        report["score_breakdown"] = {
-            "combined": round(combined, 1),
-            "historical_at_circuit": round(historical_score, 1),
-            "recent_form": round(recent_score, 1),
-            "track_fit": round(track_score, 1),
-            "weights": {k: round(v, 2) for k, v in weights.items()},
-            "historical_avg_points": round(historical_pts, 1),
-            "recent_avg_points": round(recent_pts, 1),
-        }
-
-    # Now rank by the combined score.
-    team_reports.sort(key=lambda r: -r["score_breakdown"]["combined"])
-    for idx, report in enumerate(team_reports):
-        rank = idx + 1
-        band = 1 if rank <= 2 else (2 if rank <= 5 else 4)
-        race = report.setdefault("prediction", {}).setdefault("race", {})
-        race["predicted_position"] = rank
-        race["position_range"] = [max(1, rank - band), min(20, rank + band)]
-        race["confidence"] = round(report["score_breakdown"]["combined"] / 100, 3)
-        b = report["score_breakdown"]
-        race["model_reasoning"] = (
-            f"#{rank} of {len(team_reports)} on combined score {b['combined']}/100 "
-            f"(history-at-circuit {b['historical_at_circuit']}, "
-            f"recent form {b['recent_form']}, "
-            f"track fit {b['track_fit']})."
-        )
-
-    # Season-wide Monte Carlo runs once per invocation.
-    drivers = [
-        {"driver_code": d["DriverCode"], "team_code": d.get("TeamCode"), "points": float(d.get("Points") or 0)}
-        for d in standings["drivers"]
-    ]
-    constructors_in = [
-        {"team_code": c["TeamCode"], "points": float(c.get("Points") or 0)}
-        for c in standings["constructors"]
-    ]
-    monte_carlo = simulate_championship(
-        current_standings={"drivers": drivers, "constructors": constructors_in},
-        remaining_races=[{"name": f"round_{r}"} for r in range(round_number, 25)],
-        position_distributions=_driver_position_distributions(drivers, position_distributions),
-        n_simulations=int(event.get("simulations", 5000)),
+    # 6. Aggregate team prediction = best driver position.
+    team_reports = _build_team_reports(
+        driver_scores, year, round_number, circuit_key, profile, track_fit_by_team,
     )
 
-    _persist_predictions(year, round_number, team_reports, monte_carlo)
+    # 7. Persist driver predictions and team reports.
+    _persist(year, round_number, driver_scores, team_reports)
+
     return {
         "statusCode": 200,
         "body": {
             "year": year,
             "round": round_number,
             "circuit": circuit_key,
-            "team_reports_count": len(team_reports),
-            "title_probabilities": monte_carlo.get("title_probabilities", {}),
+            "drivers_scored": len(driver_scores),
+            "team_reports": len(team_reports),
+            "top_prediction": driver_scores[0]["driver_code"] if driver_scores else None,
         },
     }
 
 
-# ----- helpers -----
+# ---------------------- data loaders ----------------------
 
-def _next_round(year: int) -> int:
-    """Find the smallest round > the most recent ingested race."""
-    response = table.scan(
-        ProjectionExpression="PK, SK",
-        FilterExpression=Key("PK").begins_with(f"RACE#{year}#"),
+def _race_roster(year: int, round_number: int) -> list[dict[str, Any]]:
+    """Pull the driver list for the upcoming race. Falls back to last race's
+    RESULT items (most accurate roster) before checking driver standings."""
+    response = table.query(
+        KeyConditionExpression=Key("PK").eq(f"RACE#{year}#{round_number}") & Key("SK").begins_with("RESULT#"),
     )
-    rounds = set()
-    for item in response.get("Items", []):
-        try:
-            rounds.add(int(item["PK"].split("#")[-1]))
-        except ValueError:
-            continue
-    return (max(rounds) + 1) if rounds else 1
+    items = response.get("Items", [])
+    if items:
+        return [
+            {
+                "driver_code": i.get("DriverCode"),
+                "driver_name": i.get("DriverName"),
+                "team_code": i.get("TeamCode"),
+            }
+            for i in items if i.get("DriverCode")
+        ]
+    return []
 
 
-def _circuit_for_round(round_number: int) -> str:
-    from feature_builder import CALENDAR_CIRCUITS_2024  # type: ignore
-    return CALENDAR_CIRCUITS_2024.get(round_number, "monza")
+def _roster_from_standings(year: int, round_number: int) -> list[dict[str, Any]]:
+    if round_number <= 0:
+        return []
+    response = table.query(
+        KeyConditionExpression=Key("PK").eq(f"STANDINGS#{year}#{round_number}") & Key("SK").begins_with("DRIVER#"),
+    )
+    return [
+        {
+            "driver_code": i.get("DriverCode"),
+            "driver_name": i.get("DriverName"),
+            "team_code": i.get("TeamCode"),
+        }
+        for i in response.get("Items", [])
+        if i.get("DriverCode")
+    ]
+
+
+def _load_qualifying(year: int, round_number: int) -> list[dict[str, Any]]:
+    response = table.query(
+        KeyConditionExpression=Key("PK").eq(f"RACE#{year}#{round_number}") & Key("SK").begins_with("QUALIFYING#"),
+    )
+    return response.get("Items", [])
+
+
+def _driver_positions_at_round(
+    driver: str, round_number: int, start_year: int, end_year: int,
+) -> list[int]:
+    """Driver's finishing position at the same round number, across prior seasons."""
+    positions: list[int] = []
+    for y in range(start_year, end_year + 1):
+        response = table.query(
+            KeyConditionExpression=Key("PK").eq(f"RACE#{y}#{round_number}") & Key("SK").eq(f"RESULT#{driver}"),
+        )
+        for item in response.get("Items", []):
+            pos = item.get("Position")
+            if isinstance(pos, (int, float, Decimal)) and pos > 0:
+                positions.append(int(pos))
+    return positions
+
+
+def _driver_recent_positions(
+    driver: str, year: int, round_number: int, window: int,
+) -> list[int]:
+    """Last `window` finishing positions this season."""
+    positions = []
+    for r in range(max(1, round_number - window), round_number):
+        response = table.query(
+            KeyConditionExpression=Key("PK").eq(f"RACE#{year}#{r}") & Key("SK").eq(f"RESULT#{driver}"),
+        )
+        for item in response.get("Items", []):
+            pos = item.get("Position")
+            if isinstance(pos, (int, float, Decimal)) and pos > 0:
+                positions.append(int(pos))
+    return positions
+
+
+def _driver_grid_to_finish_history(
+    driver: str, year: int, round_number: int, lookback: int = 10,
+) -> list[int]:
+    """Positions gained from grid → finish across the last N races."""
+    gains = []
+    rounds_back = list(range(max(1, round_number - lookback), round_number))
+    for r in rounds_back:
+        response = table.query(
+            KeyConditionExpression=Key("PK").eq(f"RACE#{year}#{r}") & Key("SK").eq(f"DRIVER_METRICS#{driver}"),
+        )
+        for item in response.get("Items", []):
+            delta = item.get("GridToFinishDelta")
+            if delta is not None:
+                gains.append(int(delta))
+    return gains
+
+
+def _driver_dnf_rate(driver: str, year: int, round_number: int, lookback: int = 10) -> float | None:
+    """DNF / DNS / accidents over the last N races. None when no data."""
+    starts = 0
+    dnf = 0
+    rounds_back = list(range(max(1, round_number - lookback), round_number))
+    for r in rounds_back:
+        response = table.query(
+            KeyConditionExpression=Key("PK").eq(f"RACE#{year}#{r}") & Key("SK").eq(f"RESULT#{driver}"),
+        )
+        for item in response.get("Items", []):
+            starts += 1
+            status = (item.get("Status") or "").lower()
+            if status != "finished" and not status.startswith("+"):
+                dnf += 1
+    return dnf / starts if starts else None
 
 
 def _load_fingerprint(team_code: str, year: int, latest_round: int) -> dict[str, float]:
@@ -245,151 +270,127 @@ def _load_fingerprint(team_code: str, year: int, latest_round: int) -> dict[str,
     return {dim: 50.0 for dim in FINGERPRINT_DIMENSIONS}
 
 
-def _load_last_upgrade(team_code: str, year: int, before_round: int) -> dict[str, Any] | None:
-    response = table.query(
-        KeyConditionExpression=Key("PK").eq(f"UPGRADE#{year}#{team_code}"),
-    )
-    items = [i for i in response.get("Items", []) if int(i.get("Round") or 0) < before_round]
-    if not items:
-        return None
-    items.sort(key=lambda i: int(i.get("Round")), reverse=True)
-    top = items[0]
-    return {
-        "detected_at_race": int(top.get("Round")),
-        "affected_dimensions": list(top.get("AffectedDimensions") or []),
-        "confidence": float(top.get("Confidence") or 0.5),
-        "delta": {dim: float(d) for dim, d in (top.get("Delta") or {}).items()},
-        "notes": top.get("Notes", ""),
-    }
+# ---------------------- reports ----------------------
 
+def _build_team_reports(
+    driver_scores, year, round_number, circuit_key, profile, track_fit_by_team,
+) -> list[dict[str, Any]]:
+    """Aggregate driver scores into one team report per team."""
+    by_team: dict[str, list[dict[str, Any]]] = {}
+    for d in driver_scores:
+        by_team.setdefault(d["team_code"], []).append(d)
 
-def _load_standings(year: int, round_number: int) -> dict[str, list[dict[str, Any]]]:
-    if round_number <= 0:
-        return {"drivers": [], "constructors": []}
-    response = table.query(
-        KeyConditionExpression=Key("PK").eq(f"STANDINGS#{year}#{round_number}"),
-    )
-    items = response.get("Items", [])
-    return {
-        "drivers": [i for i in items if i["SK"].startswith("DRIVER#")],
-        "constructors": [i for i in items if i["SK"].startswith("CONSTRUCTOR#")],
-    }
-
-
-def _avg_team_points(years: list[int], rounds: list[int], team_code: str) -> float:
-    """Mean points scored by ``team_code`` across the given (year, round)
-    pairs. Sums both drivers' points; zero is returned for rounds where the
-    team didn't race or no data is in DynamoDB."""
-    total = 0.0
-    races = 0
-    for year in years:
-        for r in rounds:
-            response = table.query(
-                KeyConditionExpression=Key("PK").eq(f"RACE#{year}#{r}") & Key("SK").begins_with("RESULT#"),
-            )
-            items = response.get("Items", [])
-            if not items:
-                continue
-            races += 1
-            for item in items:
-                if item.get("TeamCode") == team_code:
-                    total += float(item.get("Points") or 0)
-    return total / races if races else 0.0
-
-
-def _points_to_score(avg_points: float, max_per_race: float = 44.0) -> float:
-    """Map avg team points per race onto a 0-100 score. 44 ≈ 1-2 finish
-    with fastest lap (25 + 18 + 1). Capped at 100."""
-    if avg_points <= 0:
-        return 0.0
-    return min(100.0, (avg_points / max_per_race) * 100)
-
-
-def _points_gap(constructors: list[dict[str, Any]], team_code: str) -> int:
-    if not constructors:
-        return 0
-    sorted_const = sorted(constructors, key=lambda c: int(c.get("Position") or 99))
-    leader_points = float(sorted_const[0].get("Points") or 0)
-    own_points = next((float(c.get("Points") or 0) for c in constructors if c.get("TeamCode") == team_code), 0)
-    return max(0, int(leader_points - own_points))
-
-
-def _model_predict(model, feature_row: dict[str, float]) -> dict[str, Any]:
-    """Run the model if available, otherwise fall back to a heuristic."""
-    if model is None:
-        # Heuristic: compatibility ≥ 65 → bracket 1; ≥ 50 → 2; ≥ 35 → 3; else 4.
-        compat = feature_row["track_compatibility_score"]
-        bracket = (
-            0 if compat >= 75 else
-            1 if compat >= 60 else
-            2 if compat >= 45 else
-            3 if compat >= 30 else 4
+    reports = []
+    for team_code, drivers in by_team.items():
+        drivers.sort(key=lambda d: d["predicted_position"])
+        best = drivers[0]
+        avg_combined = sum(d["score_breakdown"]["combined"] for d in drivers) / len(drivers)
+        compat = compute_track_compatibility(
+            _load_fingerprint(team_code, year, round_number - 1),
+            profile,
         )
-        confidence = max(0.4, 1 - abs(compat - 50) / 100)
-        return {"bracket": bracket, "confidence": confidence, "dnf_probability": 0.08}
+        reports.append({
+            "team_code": team_code,
+            "team": team_code,
+            "race": f"Round {round_number}",
+            "year": year,
+            "round": round_number,
+            "circuit": circuit_key,
+            "track_compatibility": compat,
+            "drivers": [
+                {
+                    "driver_code": d["driver_code"],
+                    "driver_name": d.get("driver_name"),
+                    "predicted_position": d["predicted_position"],
+                    "qualifying_position": d.get("qualifying_position"),
+                    "score": d["score_breakdown"]["combined"],
+                    "signals": d["score_breakdown"]["signals"],
+                    "weights": d["score_breakdown"]["weights"],
+                    "input_data": d["input_data"],
+                }
+                for d in drivers
+            ],
+            "prediction": {
+                "race": {
+                    "predicted_position": best["predicted_position"],
+                    "position_range": [
+                        max(1, best["predicted_position"] - 1),
+                        min(20, best["predicted_position"] + 2),
+                    ],
+                    "confidence": round(avg_combined / 100, 3),
+                    "model_reasoning": (
+                        f"Best driver {best['driver_code']} predicted P{best['predicted_position']} "
+                        f"with combined score {best['score_breakdown']['combined']}/100."
+                    ),
+                },
+                "dnf_probability": 0.08,
+            },
+            "score_breakdown": {
+                "combined": round(avg_combined, 1),
+                "historical_at_circuit": best["score_breakdown"]["signals"].get("historical") or 50,
+                "recent_form": best["score_breakdown"]["signals"].get("recent_form") or 50,
+                "track_fit": round(track_fit_by_team.get(team_code, 50), 1),
+            },
+        })
 
-    import numpy as np
-    x = np.array([[feature_row[name] for name in TRAINING_FEATURES]], dtype=float)
-    probabilities = model.predict_proba(x)[0]
-    bracket = int(np.argmax(probabilities))
-    confidence = float(probabilities[bracket])
-    return {"bracket": bracket, "confidence": confidence, "dnf_probability": 0.08}
+    reports.sort(key=lambda r: r["prediction"]["race"]["predicted_position"])
+    return reports
 
 
-def _distribution_from_bucket(bracket: int, team_code: str, standings) -> dict[str, dict[int, float]]:
-    """Translate a position bucket into an approximate per-position distribution.
-    Used by the Monte Carlo simulator below.
-    """
-    bracket_to_dist = {
-        0: {1: 0.55, 2: 0.20, 3: 0.10, 4: 0.07, 5: 0.04, 6: 0.02, 7: 0.01, 8: 0.005, 9: 0.005},
-        1: {1: 0.15, 2: 0.30, 3: 0.25, 4: 0.12, 5: 0.08, 6: 0.04, 7: 0.03, 8: 0.02, 9: 0.01},
-        2: {2: 0.05, 3: 0.10, 4: 0.20, 5: 0.20, 6: 0.18, 7: 0.10, 8: 0.07, 9: 0.05, 10: 0.05},
-        3: {5: 0.08, 6: 0.12, 7: 0.15, 8: 0.18, 9: 0.15, 10: 0.12, 11: 0.10, 12: 0.05, 13: 0.05},
-        4: {10: 0.05, 11: 0.08, 12: 0.10, 13: 0.15, 14: 0.18, 15: 0.18, 16: 0.12, 17: 0.08, 18: 0.04, 19: 0.02},
-    }
-    dist = bracket_to_dist.get(bracket, bracket_to_dist[3])
-    # Both drivers in a team get the same distribution as a first approximation.
-    drivers = [d for d in standings["drivers"] if d.get("TeamCode") == team_code]
-    return {d["DriverCode"]: dist for d in drivers}
+# ---------------------- DynamoDB writes ----------------------
 
-
-def _driver_position_distributions(drivers, partial):
-    """Fill in any missing drivers with a flat distribution."""
-    out = dict(partial)
-    for d in drivers:
-        code = d["driver_code"]
-        if code not in out:
-            out[code] = {p: 1 / 20 for p in range(1, 21)}
-    return out
-
-
-def _persist_predictions(year, round_number, reports, monte_carlo):
-    """Write reports + season title-probabilities as DynamoDB items."""
-    with table.batch_writer() as batch:
-        for report in reports:
-            batch.put_item(Item=_to_ddb_item({
-                "PK": f"PREDICTION#{year}#{round_number}",
-                "SK": f"TEAM#{report['team_code']}",
-                "TeamCode": report["team_code"],
-                "Report": report,
-            }))
-        batch.put_item(Item=_to_ddb_item({
-            "PK": f"SEASON_SIM#{year}",
-            "SK": f"ROUND#{round_number:02d}",
-            "Round": round_number,
-            "MonteCarlo": monte_carlo,
+def _persist(year, round_number, driver_scores, team_reports):
+    items = []
+    for d in driver_scores:
+        items.append(_to_ddb({
+            "PK": f"PREDICTION#{year}#{round_number}",
+            "SK": f"DRIVER#{d['driver_code']}",
+            "DriverCode": d["driver_code"],
+            "TeamCode": d["team_code"],
+            "PredictedPosition": d["predicted_position"],
+            "Combined": d["score_breakdown"]["combined"],
+            "Signals": d["score_breakdown"]["signals"],
+            "Weights": d["score_breakdown"]["weights"],
+            "QualifyingPosition": d.get("qualifying_position"),
+            "InputData": d["input_data"],
+            "DriverName": d.get("driver_name"),
         }))
-    logger.info("persisted %d reports + season sim", len(reports))
+    for r in team_reports:
+        items.append(_to_ddb({
+            "PK": f"PREDICTION#{year}#{round_number}",
+            "SK": f"TEAM#{r['team_code']}",
+            "TeamCode": r["team_code"],
+            "Report": r,
+        }))
+    with table.batch_writer() as batch:
+        for item in items:
+            batch.put_item(Item=item)
+    logger.info("persisted %d driver + %d team prediction items", len(driver_scores), len(team_reports))
 
 
-def _to_ddb_item(obj):
-    """Recursively coerce floats → Decimal; strip None."""
+def _to_ddb(obj):
     if isinstance(obj, dict):
-        return {k: _to_ddb_item(v) for k, v in obj.items() if v is not None}
+        return {k: _to_ddb(v) for k, v in obj.items() if v is not None}
     if isinstance(obj, list):
-        return [_to_ddb_item(v) for v in obj]
+        return [_to_ddb(v) for v in obj]
     if isinstance(obj, float):
-        if obj != obj:  # NaN
+        if obj != obj:
             return Decimal("0")
         return Decimal(str(round(obj, 6)))
+    if isinstance(obj, bool):
+        return obj
     return obj
+
+
+def _next_round(year: int) -> int:
+    response = table.scan(
+        ProjectionExpression="PK",
+        FilterExpression=Key("PK").begins_with(f"RACE#{year}#"),
+    )
+    rounds = set()
+    for item in response.get("Items", []):
+        try:
+            rounds.add(int(item["PK"].split("#")[-1]))
+        except ValueError:
+            continue
+    return (max(rounds) + 1) if rounds else 1

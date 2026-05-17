@@ -18,11 +18,15 @@ import boto3
 import pandas as pd
 
 from dynamo_writer import batch_write
-from metrics import compute_team_race_metrics
+from metrics import (
+    compute_driver_race_metrics,
+    compute_team_race_metrics,
+)
 from transformers import (
     aggregate_driver_lap_summary,
     clean_lap_dataframe,
     laps_to_dynamo_records,
+    qualifying_to_dynamo_records,
     results_to_dynamo_records,
     standings_to_dynamo_records,
 )
@@ -68,20 +72,35 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             laps = pd.DataFrame()
 
         results = ergast.get("race_results", [])
+        qualifying = ergast.get("qualifying_results", [])
         pit_stops = ergast.get("pit_stops", [])
         constructor_standings = ergast.get("constructor_standings", [])
         driver_standings = ergast.get("driver_standings", [])
+        weather = manifest.get("weather")
 
         # Build DynamoDB items
         lap_items = laps_to_dynamo_records(laps, year, round_number)
         result_items = results_to_dynamo_records(results, year, round_number)
+        qualifying_items = qualifying_to_dynamo_records(qualifying, year, round_number)
         standings_items = standings_to_dynamo_records(
             constructor_standings, driver_standings, year, round_number
         )
-        team_metric_items = compute_team_race_metrics(laps, results, pit_stops, year, round_number)
+        team_metric_items = compute_team_race_metrics(
+            laps, results, pit_stops, year, round_number, weather=weather,
+        )
+        driver_metric_items = compute_driver_race_metrics(
+            results, qualifying, year, round_number,
+        )
 
         total_written = 0
-        for batch in (result_items, lap_items, team_metric_items, standings_items):
+        for batch in (
+            result_items,
+            lap_items,
+            team_metric_items,
+            driver_metric_items,
+            standings_items,
+            qualifying_items,
+        ):
             total_written += batch_write(TABLE_NAME, batch)
 
         # Write a slimmed driver summary as processed parquet

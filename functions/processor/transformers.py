@@ -182,6 +182,50 @@ def results_to_dynamo_records(
     return items
 
 
+def qualifying_to_dynamo_records(
+    qualifying: list[dict[str, Any]], year: int, round_number: int
+) -> list[dict[str, Any]]:
+    """Ergast qualifying rows → DynamoDB QUALIFYING# items."""
+    items: list[dict[str, Any]] = []
+    pole_time = _q_seconds(qualifying[0]) if qualifying else None
+    for q in qualifying:
+        code = q.get("driver_code") or (q.get("driver_name") or "").upper()[:3]
+        q_best = _q_seconds(q)
+        items.append(
+            {
+                "PK": f"RACE#{year}#{round_number}",
+                "SK": f"QUALIFYING#{code}",
+                "DriverCode": code,
+                "RaceKey": f"{year}#{round_number}",
+                "TeamCode": normalise_team_code(q.get("constructor", "")),
+                "Position": q.get("position"),
+                "DriverName": q.get("driver_name"),
+                "Q1": q.get("q1"),
+                "Q2": q.get("q2"),
+                "Q3": q.get("q3"),
+                "BestSeconds": q_best,
+                "GapToPole": round(q_best - pole_time, 3) if q_best and pole_time else None,
+            }
+        )
+    return items
+
+
+def _q_seconds(q: dict[str, Any]) -> float | None:
+    """Convert the fastest of Q1/Q2/Q3 to seconds."""
+    for k in ("q3", "q2", "q1"):
+        t = q.get(k)
+        if not t:
+            continue
+        try:
+            if ":" in t:
+                m, s = t.split(":", 1)
+                return round(int(m) * 60 + float(s), 3)
+            return round(float(t), 3)
+        except (ValueError, TypeError):
+            continue
+    return None
+
+
 def standings_to_dynamo_records(
     constructor_standings: list[dict[str, Any]],
     driver_standings: list[dict[str, Any]],
