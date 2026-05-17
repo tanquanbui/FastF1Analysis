@@ -36,7 +36,8 @@ Conditions:
 
 Globals:
   Function:
-    Runtime: python3.11
+    # Runtime is set per-function — IngestionFunction uses PackageType: Image
+    # which disallows Runtime, so we can't define it globally.
     Architectures: [x86_64]
     Tracing: Active
     Environment:
@@ -258,6 +259,7 @@ Resources:
     Condition: DataPipelineEnabled
     Properties:
       FunctionName: !Sub "pitstop-processor-${Environment}"
+      Runtime: python3.11
       CodeUri: functions/processor/
       Handler: app.handler
       MemorySize: 512
@@ -307,6 +309,7 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: !Sub "pitstop-api-${Environment}"
+      Runtime: python3.11
       CodeUri: functions/api/
       Handler: app.handler
       MemorySize: 256
@@ -420,6 +423,7 @@ Resources:
     Condition: Phase2Enabled
     Properties:
       FunctionName: !Sub "pitstop-fingerprint-${Environment}"
+      Runtime: python3.11
       CodeUri: functions/fingerprint/
       Handler: app.handler
       MemorySize: 512
@@ -451,6 +455,7 @@ Resources:
     Condition: Phase2Enabled
     Properties:
       FunctionName: !Sub "pitstop-trainer-${Environment}"
+      Runtime: python3.11
       CodeUri: functions/trainer/
       Handler: app.handler
       MemorySize: 256
@@ -522,6 +527,7 @@ Resources:
     Condition: Phase2Enabled
     Properties:
       FunctionName: !Sub "pitstop-predictor-${Environment}"
+      Runtime: python3.11
       CodeUri: functions/predictor/
       Handler: app.handler
       MemorySize: 1024
