@@ -116,6 +116,24 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         )
         team_reports.append(report)
 
+    # Re-rank reports by compatibility so the predicted positions are distinct
+    # 1..10 instead of every team landing in the same heuristic bucket.
+    team_reports.sort(
+        key=lambda r: -(r.get("track_compatibility", {}).get("overall_score") or 0),
+    )
+    for idx, report in enumerate(team_reports):
+        rank = idx + 1
+        # Wider band for back-of-grid teams.
+        band = 1 if rank <= 2 else (2 if rank <= 5 else 4)
+        race = report.setdefault("prediction", {}).setdefault("race", {})
+        race["predicted_position"] = rank
+        race["position_range"] = [max(1, rank - band), min(20, rank + band)]
+        race["model_reasoning"] = (
+            f"Ranked #{rank} of {len(team_reports)} on circuit fit "
+            f"({report['track_compatibility']['overall_score']:.1f}/100). "
+            "Compatibility-only ranking; XGBoost model not yet trained."
+        )
+
     # Season-wide Monte Carlo runs once per invocation.
     drivers = [
         {"driver_code": d["DriverCode"], "team_code": d.get("TeamCode"), "points": float(d.get("Points") or 0)}
