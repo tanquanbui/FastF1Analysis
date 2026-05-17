@@ -2,7 +2,10 @@ import { config } from "./config.js";
 
 async function request(path) {
   const url = `${config.apiBase}${path}`;
-  const response = await fetch(url, { headers: { Accept: "application/json" } });
+  const response = await fetch(url, {
+    headers: { Accept: "application/json" },
+    cache: "no-store",
+  });
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
     throw new Error(`${response.status} ${response.statusText} — ${detail.slice(0, 120)}`);

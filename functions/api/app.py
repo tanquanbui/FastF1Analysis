@@ -89,7 +89,10 @@ def _response(status: int, body: Any) -> dict[str, Any]:
             "Access-Control-Allow-Origin": "*",
             "Access-Control-Allow-Headers": "Content-Type,Authorization",
             "Access-Control-Allow-Methods": "GET,OPTIONS",
-            "Cache-Control": "public, max-age=300" if status == 200 else "no-store",
+            # No cache during active dev — predictions get regenerated and
+            # 5-min browser/CDN caching makes 'why is my data stale?' a recurring
+            # support thread. Drop to 30s once we're stable, or per-route.
+            "Cache-Control": "no-cache, no-store, must-revalidate",
         },
         "body": payload,
     }
