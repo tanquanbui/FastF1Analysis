@@ -364,69 +364,52 @@ async function renderPredictorComparison(year, round) {
     </div>`;
 
   try {
-    const [pred, actual] = await Promise.all([
-      api.getPredictions(year, round).catch(() => ({ team_reports: [] })),
+    const [drivers, actual] = await Promise.all([
+      api.getDriverPredictions(year, round).catch(() => ({ drivers: [] })),
       api.getRaceDetail(year, round).catch(() => ({ results: [] })),
     ]);
 
-    if (!pred.team_reports || pred.team_reports.length === 0) {
+    const predicted = drivers.drivers || [];
+    if (predicted.length === 0) {
       out.innerHTML = `
         <div class="card section-row">
           <p style="color:var(--text-muted)">
-            No prediction available for ${year} R${round} yet. The model needs to be primed
-            first — it runs as a background job that aggregates the prior rounds.
+            No driver predictions for ${year} R${round} yet. Re-run the predictor Lambda
+            once fingerprints + qualifying data are populated.
           </p>
         </div>`;
       return;
     }
 
-    // Predicted team ranking (one row per team).
-    const predicted = [...pred.team_reports].sort(
-      (a, b) =>
-        (a.prediction?.race?.predicted_position ?? 99) -
-        (b.prediction?.race?.predicted_position ?? 99),
-    );
-
-    // Actual full top-10 finishing order — both drivers of a team appear if
-    // they both finished in the top 10.
     const actualRanking = (actual.results || [])
       .filter((r) => r.Position != null)
       .sort((a, b) => (a.Position ?? 99) - (b.Position ?? 99));
 
-    // Accuracy: predicted team rank vs the team rank derived from the
-    // *first* time a team appears in the actual results (i.e. their best
-    // driver). This keeps the comparison team-level since predictions are
-    // team-level.
-    const teamBestRank = new Map();
-    actualRanking.forEach((r) => {
-      if (r.TeamCode && !teamBestRank.has(r.TeamCode)) {
-        teamBestRank.set(r.TeamCode, teamBestRank.size + 1);
-      }
-    });
-    const predRank = predicted.map((p) => p.team_code);
-    const actualTeamRank = Array.from(teamBestRank.keys());
-    const top3Hits = predRank.slice(0, 3).filter((t) => actualTeamRank.slice(0, 3).includes(t)).length;
-    const winnerHit = predRank[0] === actualTeamRank[0];
-    const meanAbsErr = mean(
-      predRank
-        .map((team, i) => {
-          const idx = actualTeamRank.indexOf(team);
-          return idx >= 0 ? Math.abs(i - idx) : null;
-        })
-        .filter((v) => v != null),
-    );
+    // Accuracy at driver level.
+    const actualByCode = new Map(actualRanking.map((r, i) => [r.DriverCode, { row: r, pos: i + 1 }]));
+    const winnerHit = predicted[0]?.DriverCode === actualRanking[0]?.DriverCode;
+    const top3PredCodes = predicted.slice(0, 3).map((p) => p.DriverCode);
+    const top3ActualCodes = actualRanking.slice(0, 3).map((r) => r.DriverCode);
+    const top3Hits = top3PredCodes.filter((c) => top3ActualCodes.includes(c)).length;
+    const errors = predicted
+      .map((p, i) => {
+        const a = actualByCode.get(p.DriverCode);
+        return a ? Math.abs(i - (a.pos - 1)) : null;
+      })
+      .filter((v) => v != null);
+    const meanAbsErr = mean(errors);
 
     out.innerHTML = `
       <div class="grid cols-2 predictor-cols">
         <section class="card section-row">
           <h2>Predicted</h2>
-          <p class="muted-h3">Using rounds 1-${round - 1} as training data</p>
+          <p class="muted-h3">Driver leaderboard · rounds 1-${round - 1} as training data</p>
           <table class="results-table predictor-table">
-            <thead><tr><th>Rank</th><th>Team</th><th>Conf</th></tr></thead>
+            <thead><tr><th>Pos</th><th>Driver</th><th>Team</th><th>Score</th></tr></thead>
             <tbody>
               ${predicted
                 .slice(0, 10)
-                .map((p, i) => predictorRow(i + 1, p.team_code, p.prediction?.race?.confidence ?? 0))
+                .map((d, i) => driverPredictionRow(i + 1, d, year, round))
                 .join("")}
             </tbody>
           </table>
@@ -460,12 +443,163 @@ async function renderPredictorComparison(year, round) {
             <p class="muted-h3">Mean position error</p>
             <p class="metric-big">${meanAbsErr.toFixed(1)}</p>
           </div>
+          <div>
+            <p class="muted-h3">Drivers scored</p>
+            <p class="metric-big">${predicted.length}</p>
+          </div>
         </div>
+        <p class="muted-h3" style="margin-top:14px">Click any predicted row to see the full signal breakdown for that driver.</p>
       </section>
     `;
+
+    // Wire up row clicks for the analysis modal.
+    document.querySelectorAll(".driver-prediction-row").forEach((row) => {
+      row.addEventListener("click", () => {
+        const code = row.dataset.driver;
+        const d = predicted.find((p) => p.DriverCode === code);
+        if (d) showDriverAnalysis(d, year, round);
+      });
+    });
   } catch (e) {
     out.innerHTML = `<section class="error">Prediction failed: ${e.message}</section>`;
   }
+}
+
+function driverPredictionRow(rank, d, year, round) {
+  const code = d.DriverCode;
+  const team = config.teamNames[d.TeamCode] || d.TeamCode;
+  const color = config.teamColors[d.TeamCode] || "#8e8e9c";
+  const score = Math.round(d.Combined ?? 0);
+  const flag = flagFor(config.driverCountry[code]);
+  return `
+    <tr class="driver-prediction-row" data-driver="${code}">
+      <td class="pos-cell">${rank}</td>
+      <td class="driver-cell">
+        <span class="flag">${flag}</span>
+        <span class="driver-name">${d.DriverName || code}</span>
+      </td>
+      <td>
+        <span class="team-swatch" style="background:${color}"></span>
+        <span class="team-name">${team}</span>
+      </td>
+      <td class="conf-cell">
+        <div class="conf-bar"><span style="width:${score}%"></span></div>
+        <span class="conf-score">${score}<span class="conf-score-suffix">/100</span></span>
+      </td>
+    </tr>`;
+}
+
+function showDriverAnalysis(d, year, round) {
+  const code = d.DriverCode;
+  const team = config.teamNames[d.TeamCode] || d.TeamCode;
+  const color = config.teamColors[d.TeamCode] || "#8e8e9c";
+  const flag = flagFor(config.driverCountry[code]);
+  const signals = d.Signals || {};
+  const weights = d.Weights || {};
+  const inputs = d.InputData || {};
+
+  const signalRows = [
+    ["qualifying", "Qualifying", `P${d.QualifyingPosition ?? "—"}`],
+    ["historical", "Historical at circuit", `last ${(inputs.historical_positions || []).length} same-round finishes`],
+    ["recent_form", "Recent form (5 races)", `avg P${avgList(inputs.recent_positions).toFixed(1)}`],
+    ["overtaking", "Overtaking skill", `avg ${avgList(inputs.grid_to_finish_history) > 0 ? "+" : ""}${avgList(inputs.grid_to_finish_history).toFixed(1)} pos/race`],
+    ["reliability", "Reliability", `DNF rate ${((inputs.dnf_rate ?? 0) * 100).toFixed(0)}%`],
+    ["track_fit", "Track fit", `${(inputs.track_fit ?? 0).toFixed(1)}/100`],
+  ]
+    .map(([key, label, sub]) => {
+      const score = signals[key];
+      const weight = weights[key];
+      if (score == null) {
+        return `
+          <div class="signal-row missing">
+            <span class="signal-label">${label}<span class="signal-sub">no data</span></span>
+            <span class="signal-bar"><span class="fill" style="width:0%; background:${color}"></span></span>
+            <span class="signal-score">—</span>
+          </div>`;
+      }
+      return `
+        <div class="signal-row">
+          <span class="signal-label">
+            ${label}
+            <span class="signal-sub">${sub} · weight ${(weight * 100).toFixed(0)}%</span>
+          </span>
+          <span class="signal-bar"><span class="fill" style="width:${score}%; background:${color}"></span></span>
+          <span class="signal-score">${Math.round(score)}</span>
+        </div>`;
+    })
+    .join("");
+
+  const html = `
+    <div class="modal-backdrop">
+      <div class="modal">
+        <button class="modal-close" aria-label="Close">×</button>
+        <div class="modal-header">
+          <div>
+            <h2>${flag} ${d.DriverName || code}</h2>
+            <p class="muted-h3" style="margin-top:6px">
+              <span class="team-swatch" style="background:${color}"></span>
+              ${team} · ${CALENDAR_2024[round] || `Round ${round}`} ${year}
+            </p>
+          </div>
+          <div class="prediction-headline">
+            <div class="metric">
+              <span class="metric-value">P${d.PredictedPosition}</span>
+              <span class="metric-label">predicted</span>
+            </div>
+            <div class="metric">
+              <span class="metric-value">${Math.round(d.Combined ?? 0)}</span>
+              <span class="metric-label">/100 combined</span>
+            </div>
+          </div>
+        </div>
+
+        <h3 class="muted-h3">Signal breakdown</h3>
+        <div class="signal-list">${signalRows}</div>
+
+        <h3 class="muted-h3">How the model decided</h3>
+        <ul class="reasoning-list">
+          ${reasoningBullets(signals, weights, inputs).join("")}
+        </ul>
+      </div>
+    </div>`;
+  const wrap = document.createElement("div");
+  wrap.innerHTML = html;
+  document.body.appendChild(wrap);
+  const close = () => wrap.remove();
+  wrap.querySelector(".modal-close").addEventListener("click", close);
+  wrap.querySelector(".modal-backdrop").addEventListener("click", (e) => {
+    if (e.target.classList.contains("modal-backdrop")) close();
+  });
+}
+
+function reasoningBullets(signals, weights, inputs) {
+  const out = [];
+  const entries = Object.entries(signals)
+    .filter(([, v]) => v != null)
+    .sort((a, b) => (b[1] * (weights[b[0]] || 0)) - (a[1] * (weights[a[0]] || 0)));
+  for (const [key, score] of entries.slice(0, 3)) {
+    const weight = weights[key] || 0;
+    const contribution = (score * weight).toFixed(1);
+    const labels = {
+      qualifying: `Strong qualifying result feeds ${contribution} pts to the score (${(weight * 100).toFixed(0)}% weight × ${score}/100).`,
+      historical: `Track record at this circuit contributes ${contribution} pts (${(weight * 100).toFixed(0)}% weight × ${score}/100).`,
+      recent_form: `Recent finishing positions contribute ${contribution} pts (${(weight * 100).toFixed(0)}% weight × ${score}/100).`,
+      overtaking: `Grid→finish skill contributes ${contribution} pts (${(weight * 100).toFixed(0)}% weight × ${score}/100).`,
+      reliability: `Reliability over the last 10 races contributes ${contribution} pts (${(weight * 100).toFixed(0)}% weight × ${score}/100).`,
+      track_fit: `Team fingerprint × this circuit's profile contributes ${contribution} pts (${(weight * 100).toFixed(0)}% weight × ${score}/100).`,
+    };
+    out.push(`<li>${labels[key] || `${key}: ${contribution} pts`}</li>`);
+  }
+  const missing = Object.entries(signals).filter(([, v]) => v == null).map(([k]) => k);
+  if (missing.length) {
+    out.push(`<li class="muted">No data for: ${missing.join(", ")}. Their weight was redistributed across the present signals.</li>`);
+  }
+  return out;
+}
+
+function avgList(arr) {
+  const nums = (arr || []).filter((v) => typeof v === "number" && !Number.isNaN(v));
+  return nums.length ? nums.reduce((a, b) => a + b, 0) / nums.length : 0;
 }
 
 function predictorRow(rank, code, confidence) {

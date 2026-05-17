@@ -572,6 +572,143 @@ main {
   border-radius: 3px;
 }
 
+/* ---------- driver-row click + modal ---------- */
+.driver-prediction-row {
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.driver-prediction-row:hover td {
+  background: rgba(232, 0, 45, 0.06);
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  padding: 24px;
+  overflow-y: auto;
+}
+
+.modal {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 28px;
+  max-width: 720px;
+  width: 100%;
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  position: relative;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+}
+
+.modal-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 20px;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  cursor: pointer;
+  line-height: 1;
+}
+.modal-close:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 22px;
+}
+
+.modal-header h2 {
+  font-size: 22px;
+  margin: 0;
+}
+
+.signal-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 22px;
+}
+
+.signal-row {
+  display: grid;
+  grid-template-columns: 260px 1fr 50px;
+  gap: 14px;
+  align-items: center;
+}
+
+.signal-row.missing {
+  opacity: 0.45;
+}
+
+.signal-label {
+  display: flex;
+  flex-direction: column;
+  font-size: 14px;
+}
+
+.signal-sub {
+  color: var(--text-muted);
+  font-size: 11px;
+  margin-top: 2px;
+}
+
+.signal-bar {
+  height: 8px;
+  background: var(--bg-elev);
+  border-radius: 4px;
+  overflow: hidden;
+  display: block;
+}
+
+.signal-bar .fill {
+  display: block;
+  height: 100%;
+}
+
+.signal-score {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.reasoning-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.reasoning-list li {
+  background: var(--bg-elev);
+  padding: 10px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.reasoning-list li.muted {
+  color: var(--text-muted);
+}
+
 /* ---------- fingerprint dimension bars ---------- */
 .dimension-bar {
   display: grid;

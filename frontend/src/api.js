@@ -23,6 +23,7 @@ export const api = {
 
   // Phase 2
   getPredictions: (year, round) => request(`/predictions/${year}/${round}`),
+  getDriverPredictions: (year, round) => request(`/predictions/${year}/${round}/drivers`),
   getTeamFingerprint: (code) => request(`/team/${code}/fingerprint`),
   getTeamCircuit: (code, circuitKey) => request(`/team/${code}/circuit/${circuitKey}`),
   getCircuitTeams: (circuitKey) => request(`/circuit/${circuitKey}/teams`),

@@ -1,185 +1,296 @@
 # PitStop Analytics
 
-A serverless F1 race intelligence platform combining real telemetry, historical results, and machine learning to produce pre-race team analysis reports.
+A serverless F1 race-intelligence platform combining real telemetry, historical race data, and a heuristic driver-level prediction model. Built on AWS — Lambda (zip + container images), DynamoDB, S3, CloudFront, API Gateway — with a vanilla-JS dashboard.
 
-Built on AWS (Lambda, DynamoDB, S3, SageMaker, CloudFront) with a React-style vanilla JS dashboard.
+> **Live dev environment:** [https://d13188yck2eq19.cloudfront.net](https://d13188yck2eq19.cloudfront.net)
 
 ---
 
 ## Architecture
 
 ```mermaid
-flowchart TD
-    Sched[EventBridge Scheduler] -->|Mon 06:00 UTC| Ing[Ingestion Lambda]
-    Ing -->|raw parquet| RawS3[(S3: pitstop-raw)]
-    Ing -->|FastF1| FF1[FastF1]
-    Ing -->|REST| Erg[Ergast / jolpi.ca]
-    RawS3 -->|S3 event| Proc[Processor Lambda]
-    Proc -->|metrics| Dyn[(DynamoDB: F1Data)]
-    Proc -->|processed parquet| ProcS3[(S3: pitstop-processed)]
-    Proc -->|trigger| Fp[Fingerprint Lambda]
-    Fp -->|fingerprint updates| Dyn
+flowchart TB
+    subgraph Schedule["EventBridge schedules"]
+        S1["Mon 06:00 UTC<br/>Post-race ingest"]
+        S2["Thu 12:00 UTC<br/>Pre-race predict"]
+        S3["Monthly<br/>Retrain (deferred)"]
+    end
 
-    Sched2[EventBridge: Monthly] --> Train[Trainer Lambda]
-    Train -->|launch job| SM[SageMaker XGBoost]
-    SM -->|model.tar.gz| ModelS3[(S3: pitstop-models)]
+    subgraph Sources["External data"]
+        FF1["FastF1<br/>(telemetry · laps · sectors)"]
+        ER["Ergast / jolpi.ca<br/>(results · standings · pit · quali)"]
+    end
 
-    Sched3[EventBridge: Thursday] --> Pred[Predictor Lambda]
-    Pred -->|read model| ModelS3
-    Pred -->|read state| Dyn
-    Pred -->|reports| Dyn
+    subgraph Raw["S3 raw bucket"]
+        RAW["races/{year}/{round}/<br/>laps_R.parquet<br/>laps_Q.parquet<br/>speed_trap.parquet<br/>ergast.json<br/>_manifest.json"]
+    end
 
-    UI[CloudFront + S3 Dashboard] -->|REST| APIGw[API Gateway]
-    APIGw --> Api[API Lambda]
-    Api --> Dyn
+    subgraph Compute["Lambda compute"]
+        ING["Ingestion Lambda<br/>(container image)<br/>fastf1 + ergast"]
+        PROC["Processor Lambda<br/>(zip)<br/>S3-event triggered"]
+        FP["Fingerprint Lambda<br/>(zip)<br/>8-dim team fingerprints"]
+        PRED["Predictor Lambda<br/>(container image)<br/>driver-level 6-signal model"]
+    end
+
+    subgraph Store["DynamoDB · F1Data (single-table)"]
+        RESULTS["RESULT#driver"]
+        LAPS["LAP#driver#NNN"]
+        TM["TEAM_METRICS#team"]
+        DM["DRIVER_METRICS#driver"]
+        Q["QUALIFYING#driver"]
+        STAND["STANDINGS#year#round"]
+        FP_["FINGERPRINT#year#team"]
+        PRD["PREDICTION#year#round<br/>(driver + team rows)"]
+    end
+
+    subgraph UI["Frontend"]
+        CF["CloudFront"]
+        S3D["S3 dashboard bucket"]
+        APIG["API Gateway"]
+        API["API Lambda"]
+        DASH["Vanilla JS<br/>Chart.js dashboard"]
+    end
+
+    S1 --> ING
+    ING -->|FastF1| FF1
+    ING -->|REST| ER
+    ING -->|put parquet/json| RAW
+    RAW -->|S3 Object Created| PROC
+    PROC --> RESULTS
+    PROC --> LAPS
+    PROC --> TM
+    PROC --> DM
+    PROC --> Q
+    PROC --> STAND
+    PROC -.->|S3 event chain| FP
+    FP --> FP_
+
+    S2 --> PRED
+    PRED -.->|read| DM
+    PRED -.->|read| Q
+    PRED -.->|read| RESULTS
+    PRED -.->|read| FP_
+    PRED --> PRD
+
+    DASH --> CF
+    CF --> S3D
+    DASH -->|fetch| APIG
+    APIG --> API
+    API -.->|query| RESULTS
+    API -.->|query| LAPS
+    API -.->|query| STAND
+    API -.->|query| PRD
 ```
 
 ---
 
-## The 8-dimension fingerprint
+## The prediction model
 
-Every team is scored 0–100 on:
+The predictor runs **per driver**, then aggregates to a team prediction (= team's best driver's predicted position). For every driver we compute six interpretable signals and blend them into a 0-100 combined score. Rank descending; that's the predicted finishing order.
 
-| Dimension | What it measures |
+```mermaid
+flowchart LR
+    subgraph Inputs["Per-driver inputs (from DynamoDB)"]
+        QP["Qualifying position<br/>(this race)"]
+        HIST["Historical positions<br/>at this circuit<br/>(3 prior seasons)"]
+        REC["Recent finishing<br/>positions<br/>(last 5 races)"]
+        GRID["Grid → Finish deltas<br/>(last 10 races)"]
+        DNF["DNF rate<br/>(last 10 races)"]
+        FIT["Team fingerprint<br/>× circuit profile"]
+    end
+
+    subgraph Signals["Per-signal score (0-100)"]
+        S1["qualifying_score"]
+        S2["historical_score"]
+        S3["recent_form_score"]
+        S4["overtaking_score"]
+        S5["reliability_score"]
+        S6["track_fit_score"]
+    end
+
+    subgraph Blend["Weighted blend"]
+        W["30% qualifying<br/>20% historical<br/>20% recent form<br/>10% overtaking<br/>10% reliability<br/>10% track fit"]
+        C["Combined 0-100"]
+        R["Ranked driver list"]
+    end
+
+    QP --> S1
+    HIST --> S2
+    REC --> S3
+    GRID --> S4
+    DNF --> S5
+    FIT --> S6
+    S1 & S2 & S3 & S4 & S5 & S6 --> W
+    W --> C
+    C --> R
+```
+
+### Signal definitions
+
+| Signal | Source | Mapped to 0-100 |
+|---|---|---|
+| **Qualifying position** | `QUALIFYING#{driver}` for this race | P1 = 100, P20 = 0, linear in between |
+| **Historical at circuit** | `RESULT#{driver}` at same round number, prior 3 seasons | Same position→score mapping, averaged across years |
+| **Recent form** | `RESULT#{driver}` over last 5 rounds | Position-to-score, averaged |
+| **Overtaking** | `DRIVER_METRICS#{driver}.GridToFinishDelta` over last 10 races | Avg +5 → 75 score, +0 → 50, −5 → 25 |
+| **Reliability** | `RESULT#{driver}.Status` over last 10 races (count non-Finished) | `(1 − dnf_rate) × 100` |
+| **Track fit** | Team's 8-dim fingerprint × circuit's 8-dim profile (dot product) | Already 0-100 |
+
+### What if a signal is missing?
+
+Each signal can be unavailable: no qualifying done yet, driver's first season at this circuit, early-season (no recent form), etc. When that happens, the weight of the missing signal is **redistributed proportionally across the present signals**, so the score stays on a 0-100 scale. The UI shows missing signals greyed-out in the driver analysis modal.
+
+### The 8-dimension team fingerprint
+
+The track-fit signal depends on a separate per-team fingerprint, updated after every race. Eight dimensions, each 0-100, computed as percentile ranks within an exponentially weighted 8-race window (most recent race ~2× the weight of the eighth-most-recent):
+
+| Dimension | Proxy in current data |
 |---|---|
-| `straight_line_speed` | Top speed in DRS zones and speed traps |
-| `high_speed_cornering` | Performance in >180 kph corners |
-| `low_speed_cornering` | Mechanical grip in <100 kph corners |
-| `tyre_management` | Lap time degradation rate over a stint |
-| `qualifying_pace` | Single-lap pace vs pole |
-| `race_pace_conversion` | Quali position → race position delta |
-| `tyre_strategy_execution` | Pit timing and undercut effectiveness |
-| `wet_weather_performance` | Performance delta in wet/mixed conditions |
+| `straight_line_speed` | inverted BestLapSeconds |
+| `high_speed_cornering` | AvgRacePaceSeconds |
+| `low_speed_cornering` | MedianRacePaceSeconds |
+| `tyre_management` | LapPaceStdDev |
+| `qualifying_pace` | BestLapSeconds |
+| `race_pace_conversion` | PointsScored + DriversFinished × 2 |
+| `tyre_strategy_execution` | AvgPitDurationSeconds |
+| `wet_weather_performance` | (no clean signal yet — defaults to 50) |
 
-Scores use an exponentially weighted rolling average — the most recent race carries roughly 2× the weight of a race eight rounds ago.
-
----
-
-## How upgrade detection works
-
-We never need to scrape upgrade news. After every race, the team's new fingerprint is computed and compared to the rolling baseline using **Welch's t-test** per dimension (unequal variance, robust to small samples). If `p < 0.1` on any dimension, an `UPGRADE#` record is written to DynamoDB with the affected dimensions, deltas, and a confidence score.
-
-Cross-referencing upgrade deltas against the upcoming circuit profile gives a projected lap-time benefit per circuit.
+Circuit profiles (`functions/fingerprint/circuit_profiler.py`) assign each of the 19 supported circuits a 0-1 weight on each dimension. Monaco scores 0.95 on `low_speed_cornering` and 0.15 on `straight_line_speed`; Monza is the inverse.
 
 ---
 
-## Circuit profiling
+## What's NOT in the model (yet)
 
-Every circuit gets weights (0–1) on the same 8 dimensions, describing what the track rewards. Monaco scores 0.95 on `low_speed_cornering` and 0.15 on `straight_line_speed`; Monza is the inverse.
-
-`compute_track_compatibility(team_fingerprint, circuit_profile)` returns an overall 0–100 score plus per-dimension breakdown, surfacing strengths exploited and weaknesses exposed.
+| Gap | Why it matters |
+|---|---|
+| Trained XGBoost classifier | Trainer Lambda + SageMaker training job exist but haven't been kicked off. Cost-deferred. |
+| Live weather forecast | We capture historical weather per race but don't fetch the forecast for upcoming ones. |
+| Grid penalty handling | Penalty announcements aren't in our data feed. |
+| Driver-level fingerprint | Fingerprints are team-only — both team-mates get the same `track_fit` signal. |
+| Track-specific safety-car probability | We compute `SafetyCarLapPct` per race but don't yet feed it into the score. |
 
 ---
 
-## ML model
+## Project layout
 
-**XGBoost multi-class classifier** (predicts finishing-position bracket: P1 / P2-3 / P4-5 / P6-10 / P11+).
+```
+pitstop-analytics/
+├── README.md                       # you are here
+├── template.yaml                   # SAM — all infrastructure
+├── samconfig.toml
+├── Makefile
+├── DEPLOY.md                       # step-by-step deploy runbook
+├── functions/
+│   ├── ingestion/                  # container image — fastf1 too heavy for zip
+│   │   ├── Dockerfile
+│   │   ├── app.py
+│   │   ├── fastf1_client.py
+│   │   └── ergast_client.py
+│   ├── processor/                  # zip — pandas/pyarrow/numpy
+│   │   ├── app.py
+│   │   ├── transformers.py
+│   │   ├── metrics.py
+│   │   └── dynamo_writer.py
+│   ├── fingerprint/                # zip — scipy/numpy
+│   │   ├── app.py
+│   │   └── feature_engineer.py
+│   ├── predictor/                  # container image — xgboost reserved for v2
+│   │   ├── Dockerfile
+│   │   ├── app.py
+│   │   ├── scorer.py               # 6-signal blend
+│   │   ├── championship_sim.py
+│   │   └── report_builder.py
+│   ├── trainer/                    # SageMaker training job launcher
+│   └── api/                        # zip — boto3 only
+│       ├── app.py
+│       └── routes/
+│           ├── races.py
+│           ├── predictions.py
+│           ├── standings.py
+│           └── ...
+├── shared/python/                  # mounted onto fingerprint/predictor Lambdas
+│   ├── circuit_profiler.py
+│   ├── features.py
+│   └── upgrade_detector.py
+├── frontend/
+│   ├── index.html
+│   ├── src/
+│   │   ├── main.js
+│   │   ├── api.js
+│   │   ├── config.js
+│   │   └── charts/
+│   └── styles/main.css
+└── .github/workflows/
+    ├── deploy-infra.yml            # SAM build + deploy on push to main
+    └── deploy-frontend.yml         # s3 sync + CloudFront invalidate
+```
 
-Why XGBoost, not a neural network:
+---
 
-- Explainable via SHAP values — every prediction comes with feature-importance reasoning
-- Handles structured tabular data with ~3,500 training rows well
-- Lambda inference <100 ms
-- Trains in the SageMaker built-in container (no custom image)
+## DynamoDB single-table design
 
-See `ml/features.py` for the full feature list (team fingerprint + circuit compatibility + recent form + championship context + upgrade recency + practice pace + weather).
+Table `F1Data` with two GSIs (`DriverRaceIndex`, `TeamTrackIndex`):
+
+| PK | SK | Used for |
+|---|---|---|
+| `RACE#{year}#{round}` | `RESULT#{driver}` | Final race results |
+| `RACE#{year}#{round}` | `LAP#{driver}#{nnn}` | Lap-by-lap data |
+| `RACE#{year}#{round}` | `TEAM_METRICS#{team}` | Aggregated team race metrics |
+| `RACE#{year}#{round}` | `DRIVER_METRICS#{driver}` | Grid, finish, gap, DNF flag |
+| `RACE#{year}#{round}` | `QUALIFYING#{driver}` | Q1/Q2/Q3 times, gap to pole |
+| `STANDINGS#{year}#{round}` | `CONSTRUCTOR#{team}` or `DRIVER#{code}` | Championship standings |
+| `FINGERPRINT#{year}#{team}` | `TRACK#round_NN` | 8-dim fingerprint snapshot |
+| `UPGRADE#{year}#{team}` | `RACE#{round}` | Detected upgrade events |
+| `PREDICTION#{year}#{round}` | `DRIVER#{code}` | Per-driver score breakdown |
+| `PREDICTION#{year}#{round}` | `TEAM#{team}` | Aggregated team report |
 
 ---
 
 ## Deployment
 
-### Prerequisites
+See [DEPLOY.md](DEPLOY.md) for the step-by-step runbook.
 
-- AWS account, AWS CLI configured for region `ap-southeast-2`
-- SAM CLI ≥ 1.100
-- Python 3.11
-- Node 18+ (for frontend build)
-
-### Phase 1 — data pipeline + dashboard
+The short version (with AWS creds configured for `ap-southeast-2`):
 
 ```bash
-make install
-make build
-make deploy
+make preflight              # compile-check + tests + sam validate
+sam build --use-container   # needs Docker for fastf1 + xgboost containers
+sam deploy --guided         # first time only; subsequent deploys: make deploy
+make seed-historical        # backfill 2020-2024
 ```
 
-`sam deploy` will guide you through the first-run prompts. After deployment, seed historical data:
-
-```bash
-make seed-historical
-```
-
-### Phase 2 — ML layer
-
-Same `make deploy` — Phase 2 resources are gated behind the `EnablePhase2` parameter (default `true`).
-
-### Frontend
-
-Dashboard build + sync to S3 happens via the `deploy-frontend.yml` GitHub Actions workflow on every push to `main`. To deploy manually:
-
-```bash
-cd frontend
-npm ci && npm run build
-aws s3 sync dist/ s3://pitstop-dashboard-<account-id>/ --delete
-aws cloudfront create-invalidation --distribution-id <id> --paths "/*"
-```
-
----
-
-## API
-
-Base URL: `https://api.<your-domain>.com` (or the API Gateway invoke URL).
-
-### Phase 1
-
-| Method | Path | Returns |
-|---|---|---|
-| GET | `/races/{year}` | Season race list with summary |
-| GET | `/races/{year}/{round}` | Full race detail (laps, results, sectors) |
-| GET | `/drivers/{code}` | Driver profile + season history |
-| GET | `/teams/{code}` | Team profile + season results |
-| GET | `/standings/{year}/{round}` | Both standings tables at a round |
-
-### Phase 2
-
-| Method | Path | Returns |
-|---|---|---|
-| GET | `/predictions/{year}/{round}` | Pre-race report for every team |
-| GET | `/team/{code}/fingerprint` | Current 8-d fingerprint + trend |
-| GET | `/team/{code}/circuit/{key}` | Team × circuit compatibility breakdown |
-| GET | `/circuit/{key}/teams` | All teams ranked at this circuit |
-| GET | `/championship/{year}/scenarios` | Monte Carlo title probabilities |
-| GET | `/upgrades/{year}/{team_code}` | Detected upgrade events |
-
-Example responses in `docs/api-examples/`.
+The GitHub Actions workflow in `.github/workflows/deploy-infra.yml` does the same thing on every push to `main`, using OIDC role assumption (no long-lived secrets).
 
 ---
 
 ## Local development
 
 ```bash
-make install
-make test            # all unit tests
-sam local start-api  # API Gateway + Lambda locally
+make preflight              # all unit tests green
+python scripts/local_api.py --mock --port 3030    # local dev API w/ mock data
+cd frontend && python3 -m http.server 8080        # serve dashboard
+open http://localhost:8080
 ```
 
-FastF1 caches session data on disk (`fastf1_cache/`) — first run on a session can be slow.
+Switch `frontend/src/config.js` `LOCAL_API` to `http://localhost:3030` for the local mock backend.
 
 ---
 
-## Limitations and known gaps
+## Limitations
 
-- FastF1 telemetry is rate-limited at the source; backfill scripts pace requests.
-- Ergast public mirror (jolpi.ca) has occasional 5xx — clients retry with exponential backoff.
-- Wet-weather samples are sparse; the `wet_weather_performance` dimension carries a `confidence` field that drops below 0.5 when fewer than 4 wet sessions are in the rolling window.
-- Upgrade detector is sensitive to one-off anomalies (driver error, safety car timing). The `confidence` score below 0.6 should be treated as noise.
+- **Hand-tuned weights, no training.** The 30/20/20/10/10/10 blend is heuristic. A trained model (XGBoost on historical results) would beat it, but training requires running a SageMaker job — deferred for cost reasons.
+- **Two seasons of data only.** Historical-at-circuit becomes a stronger signal with more years; we have 2023 + 2024 ingested.
+- **Driver predictions inherit team fingerprint.** Verstappen and Pérez get the same `track_fit` score. A driver-specific fingerprint is a natural next step.
+- **No live race-day signals.** No safety-car forecast, no grid penalty awareness, no weather forecast for the upcoming race.
 
 ---
 
-## Future improvements
+## Next steps
 
-- Real-time qualifying delta updates streamed via WebSocket on race weekends
-- Tyre compound forecasting from FP1/FP2 long-run analysis
-- Direct integration with Open-Meteo for race-window weather windows
-- LLM-generated narrative summaries on top of the structured report
-- Driver-specific fingerprints (separate from team) to model driver vs car contribution
+Roughly in priority order:
+
+1. **Driver-specific fingerprint** — separate the two team-mates in the track-fit signal.
+2. **Open-Meteo weather forecast** — for the next-Sunday race window.
+3. **Train an XGBoost classifier** — kick off the trainer Lambda once a month, swap the heuristic for the model's `predict_proba`.
+4. **Grid penalty feed** — manual or from the FIA press releases.
+5. **Sprint races** — currently ignored; would feed the `recent_form` signal.
