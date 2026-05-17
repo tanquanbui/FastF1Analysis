@@ -160,7 +160,7 @@ async function pageRace(year, round) {
       </section>
 
       <section class="card section-row">
-        <h2>Lap times</h2>
+        <h2>Race progression</h2>
         <div class="chart-container chart-tall"><canvas id="lap-chart"></canvas></div>
       </section>
 
