@@ -95,11 +95,16 @@ jobs:
 
       - name: SAM deploy
         run: |
+          # Workflow_dispatch passes environment=dev/prod for Environment param
+          # but the samconfig.toml only has [default] and [prod] envs (no [dev]).
+          # Map dev → default config env, prod → prod.
+          ENV_INPUT="${{ github.event.inputs.environment || 'dev' }}"
+          if [ "$ENV_INPUT" = "prod" ]; then CONFIG_ENV=prod; else CONFIG_ENV=default; fi
           sam deploy \
-            --config-env ${{ github.event.inputs.environment || 'default' }} \
+            --config-env "$CONFIG_ENV" \
             --no-confirm-changeset \
             --no-fail-on-empty-changeset \
             --parameter-overrides \
-              Environment=${{ github.event.inputs.environment || 'dev' }} \
+              Environment="$ENV_INPUT" \
               EnableDataPipeline=true \
               EnablePhase2=true
