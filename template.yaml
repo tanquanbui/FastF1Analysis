@@ -64,7 +64,7 @@ Resources:
       Description: Shared circuit profiles + fingerprint dimension constants.
       ContentUri: shared/
       CompatibleRuntimes: [python3.11]
-      CompatibleArchitectures: [arm64]
+      CompatibleArchitectures: [x86_64]
       RetentionPolicy: Retain
 
   # ---------- S3 ----------
@@ -527,15 +527,17 @@ Resources:
   PredictorFunction:
     Type: AWS::Serverless::Function
     Condition: Phase2Enabled
+    Metadata:
+      Dockerfile: functions/predictor/Dockerfile
+      DockerContext: .
+      DockerTag: latest
     Properties:
       FunctionName: !Sub "pitstop-predictor-${Environment}"
-      Runtime: python3.11
-      CodeUri: functions/predictor/
-      Handler: app.handler
+      PackageType: Image
+      # xgboost + scipy + pandas + numpy exceed the 250MB Lambda zip limit;
+      # ship as a container image instead.
       MemorySize: 1024
       Timeout: 300
-      Layers:
-        - !Ref SharedLayer
       Policies:
         - Statement:
             - Effect: Allow
