@@ -430,11 +430,11 @@ async function renderPredictorComparison(year, round) {
           <h2>Actual</h2>
           <p class="muted-h3">${CALENDAR_2024[round] || `Round ${round}`} ${year} result</p>
           <table class="results-table predictor-table">
-            <thead><tr><th>Pos</th><th>Team</th><th>Driver</th></tr></thead>
+            <thead><tr><th>Rank</th><th>Team</th><th>Best finisher</th></tr></thead>
             <tbody>
               ${actualRanking
                 .slice(0, 10)
-                .map((r) => actualRow(r))
+                .map((r, i) => actualRow(i + 1, r))
                 .join("")}
             </tbody>
           </table>
@@ -478,13 +478,13 @@ function predictorRow(rank, code, confidence) {
     </tr>`;
 }
 
-function actualRow(r) {
+function actualRow(rank, r) {
   const flag = flagFor(config.driverCountry[r.DriverCode]);
   const team = config.teamNames[r.TeamCode] || r.TeamCode;
   const color = config.teamColors[r.TeamCode] || "#8e8e9c";
   return `
     <tr>
-      <td class="pos-cell">${r.Position ?? "—"}</td>
+      <td class="pos-cell">${rank}</td>
       <td>
         <span class="team-swatch" style="background:${color}"></span>
         <span class="team-name">${team}</span>
@@ -492,6 +492,7 @@ function actualRow(r) {
       <td class="driver-cell">
         <span class="flag">${flag}</span>
         <span class="driver-name">${r.DriverName || r.DriverCode}</span>
+        <span class="driver-pos">P${r.Position ?? "?"}</span>
       </td>
     </tr>`;
 }

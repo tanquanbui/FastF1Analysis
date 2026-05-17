@@ -540,6 +540,16 @@ main {
   margin: 0;
 }
 
+.driver-pos {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  background: var(--bg-elev);
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
 /* ---------- fingerprint dimension bars ---------- */
 .dimension-bar {
   display: grid;
