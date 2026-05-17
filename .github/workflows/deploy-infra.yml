@@ -99,4 +99,7 @@ jobs:
             --config-env ${{ github.event.inputs.environment || 'default' }} \
             --no-confirm-changeset \
             --no-fail-on-empty-changeset \
-            --parameter-overrides Environment=${{ github.event.inputs.environment || 'dev' }}
+            --parameter-overrides \
+              Environment=${{ github.event.inputs.environment || 'dev' }} \
+              EnableDataPipeline=true \
+              EnablePhase2=true
