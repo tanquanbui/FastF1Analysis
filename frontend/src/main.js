@@ -471,7 +471,7 @@ async function renderPredictorComparison(year, round) {
 function predictorRow(rank, code, confidence) {
   const team = config.teamNames[code] || code;
   const color = config.teamColors[code] || "#8e8e9c";
-  const confPct = Math.round((confidence ?? 0) * 100);
+  const score = Math.round((confidence ?? 0) * 100);
   return `
     <tr>
       <td class="pos-cell">${rank}</td>
@@ -479,7 +479,10 @@ function predictorRow(rank, code, confidence) {
         <span class="team-swatch" style="background:${color}"></span>
         <span class="team-name">${team}</span>
       </td>
-      <td><div class="conf-bar"><span style="width:${confPct}%"></span></div></td>
+      <td class="conf-cell">
+        <div class="conf-bar"><span style="width:${score}%"></span></div>
+        <span class="conf-score">${score}<span class="conf-score-suffix">/100</span></span>
+      </td>
     </tr>`;
 }
 

@@ -516,13 +516,19 @@ main {
   font-size: 13px;
 }
 
+.conf-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .conf-bar {
   display: block;
-  height: 4px;
+  height: 6px;
   background: var(--bg-elev);
-  border-radius: 2px;
+  border-radius: 3px;
   overflow: hidden;
-  width: 100%;
+  flex: 1;
   min-width: 60px;
 }
 
@@ -530,6 +536,22 @@ main {
   display: block;
   height: 100%;
   background: linear-gradient(90deg, var(--accent), #ff5e7a);
+}
+
+.conf-score {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--text);
+  font-size: 13px;
+  white-space: nowrap;
+  min-width: 56px;
+  text-align: right;
+}
+
+.conf-score-suffix {
+  color: var(--text-muted);
+  font-weight: 400;
+  font-size: 11px;
 }
 
 .metric-big {
