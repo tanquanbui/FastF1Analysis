@@ -11,6 +11,31 @@ export function renderPredictionCard(report) {
 
   const confClass = (c) => (c >= 0.7 ? "" : c >= 0.5 ? "med" : "low");
 
+  const breakdown = report.score_breakdown;
+  const scoreBars = breakdown
+    ? `
+      <div class="dimension-bar">
+        <span class="label">Historical at circuit</span>
+        <span class="track"><span class="fill" style="width:${breakdown.historical_at_circuit}%; background:${teamColor}"></span></span>
+        <span class="value">${Math.round(breakdown.historical_at_circuit)}</span>
+      </div>
+      <div class="dimension-bar">
+        <span class="label">Recent form (5 races)</span>
+        <span class="track"><span class="fill" style="width:${breakdown.recent_form}%; background:${teamColor}"></span></span>
+        <span class="value">${Math.round(breakdown.recent_form)}</span>
+      </div>
+      <div class="dimension-bar">
+        <span class="label">Track fit</span>
+        <span class="track"><span class="fill" style="width:${breakdown.track_fit}%; background:${teamColor}"></span></span>
+        <span class="value">${Math.round(breakdown.track_fit)}</span>
+      </div>
+      <div class="dimension-bar combined">
+        <span class="label"><strong>Combined</strong></span>
+        <span class="track"><span class="fill" style="width:${breakdown.combined}%"></span></span>
+        <span class="value"><strong>${Math.round(breakdown.combined)}</strong></span>
+      </div>`
+    : "";
+
   const dimensionBars = tc.dimension_breakdown
     ? Object.entries(tc.dimension_breakdown)
         .sort(([, a], [, b]) => b - a)
@@ -67,7 +92,9 @@ export function renderPredictionCard(report) {
       </p>
       ${pred.model_reasoning ? `<p class="reasoning">${pred.model_reasoning}</p>` : ""}
 
-      ${dimensionBars ? `<h3 class="muted-h3">Dimension breakdown</h3>${dimensionBars}` : ""}
+      ${scoreBars ? `<h3 class="muted-h3">Score breakdown</h3>${scoreBars}` : ""}
+
+      ${dimensionBars ? `<h3 class="muted-h3">Fingerprint dimensions</h3>${dimensionBars}` : ""}
 
       ${scenarioRows
         ? `<h3 class="muted-h3">Championship outcomes</h3>
