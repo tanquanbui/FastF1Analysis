@@ -107,6 +107,19 @@ async function pageSeason(year = config.currentSeason) {
   }
 }
 
+function flagFor(code) {
+  if (!code) return "";
+  return code
+    .toUpperCase()
+    .split("")
+    .map((c) => String.fromCodePoint(127397 + c.charCodeAt(0)))
+    .join("");
+}
+
+function fullTeamName(code, fallback) {
+  return config.teamNames[code] || fallback || code || "Unknown";
+}
+
 async function pageRace(year, round) {
   setLoading(`Loading ${year} Round ${round}…`);
   updateNavActive("race");
@@ -114,42 +127,52 @@ async function pageRace(year, round) {
     const data = await api.getRaceDetail(year, round);
     const top10 = (data.results || []).slice(0, 10);
     const resultsHtml = top10
-      .map(
-        (r) => `
+      .map((r) => {
+        const flag = flagFor(config.driverCountry[r.DriverCode]);
+        const team = fullTeamName(r.TeamCode, r.ConstructorName);
+        return `
           <tr>
             <td class="pos-cell">${r.Position ?? "—"}</td>
-            <td>${r.DriverName || r.DriverCode}</td>
-            <td>${teamTag(r.TeamCode || "UNK")}</td>
-            <td>${r.Points ?? 0}</td>
+            <td class="driver-cell">
+              <span class="flag">${flag}</span>
+              <span class="driver-name">${r.DriverName || r.DriverCode}</span>
+            </td>
+            <td>
+              <span class="team-swatch" style="background:${config.teamColors[r.TeamCode] || "#8e8e9c"}"></span>
+              <span class="team-name">${team}</span>
+            </td>
+            <td class="pts-cell">${r.Points ?? 0}</td>
             <td style="color:var(--text-muted)">${r.Status || ""}</td>
-          </tr>`,
-      )
+          </tr>`;
+      })
       .join("");
 
     app.innerHTML = `
       <h1 class="page-title">Round ${round} · ${year}</h1>
       <p class="page-subtitle">${data.results?.length || 0} classified · ${data.laps?.length || 0} lap records · ${data.team_metrics?.length || 0} teams</p>
-      <div class="grid cols-2">
-        <div class="card">
-          <h2>Top 10</h2>
-          <table class="results-table">
-            <thead><tr><th>Pos</th><th>Driver</th><th>Team</th><th>Pts</th><th>Status</th></tr></thead>
-            <tbody>${resultsHtml}</tbody>
-          </table>
-        </div>
-        <div class="card">
-          <h2>Lap times</h2>
-          <div class="chart-container"><canvas id="lap-chart"></canvas></div>
-        </div>
-        <div class="card">
-          <h2>Tyre strategy</h2>
-          <div class="chart-container"><canvas id="tyre-chart"></canvas></div>
-        </div>
-        <div class="card">
-          <h2>Sector breakdown</h2>
-          <div class="chart-container"><canvas id="sector-chart"></canvas></div>
-        </div>
-      </div>
+
+      <section class="card section-row">
+        <h2>Top 10</h2>
+        <table class="results-table">
+          <thead><tr><th>Pos</th><th>Driver</th><th>Team</th><th>Pts</th><th>Status</th></tr></thead>
+          <tbody>${resultsHtml}</tbody>
+        </table>
+      </section>
+
+      <section class="card section-row">
+        <h2>Lap times</h2>
+        <div class="chart-container chart-tall"><canvas id="lap-chart"></canvas></div>
+      </section>
+
+      <section class="card section-row">
+        <h2>Tyre strategy</h2>
+        <div class="chart-container chart-tall"><canvas id="tyre-chart"></canvas></div>
+      </section>
+
+      <section class="card section-row">
+        <h2>Sector breakdown</h2>
+        <div class="chart-container chart-tall"><canvas id="sector-chart"></canvas></div>
+      </section>
     `;
     renderLapTimesChart("lap-chart", data.laps || []);
     renderTyreStrategyChart("tyre-chart", data.laps || []);

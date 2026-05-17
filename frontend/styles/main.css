@@ -309,8 +309,56 @@ main {
   height: 360px;
 }
 
+.chart-container.chart-tall {
+  height: 460px;
+}
+
 .chart-container canvas {
   max-width: 100%;
+}
+
+/* ---------- section rows ---------- */
+.section-row {
+  margin-bottom: 20px;
+}
+
+.section-row:last-child {
+  margin-bottom: 0;
+}
+
+/* ---------- driver / team cells ---------- */
+.driver-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.driver-cell .flag {
+  font-size: 18px;
+  line-height: 1;
+  filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.3));
+}
+
+.driver-cell .driver-name {
+  font-weight: 500;
+}
+
+.team-swatch {
+  display: inline-block;
+  width: 4px;
+  height: 14px;
+  border-radius: 2px;
+  vertical-align: -2px;
+  margin-right: 8px;
+}
+
+.team-name {
+  font-weight: 500;
+}
+
+.pts-cell {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
 }
 
 /* ---------- prediction / fingerprint specifics ---------- */

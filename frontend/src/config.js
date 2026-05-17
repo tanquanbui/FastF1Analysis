@@ -20,6 +20,33 @@ export const config = {
     SAU: "#52e252",
     HAA: "#b6babd",
   },
+  teamNames: {
+    RBR: "Red Bull Racing",
+    MCL: "McLaren",
+    FER: "Scuderia Ferrari",
+    MER: "Mercedes-AMG Petronas",
+    AST: "Aston Martin Aramco",
+    ALP: "BWT Alpine",
+    WIL: "Williams Racing",
+    RB: "Visa Cash App RB",
+    SAU: "Kick Sauber",
+    HAA: "MoneyGram Haas",
+  },
+  // Driver code → ISO 3166-1 alpha-2 country code; used to render flag
+  // emojis next to the driver name in the top 10.
+  driverCountry: {
+    VER: "NL", PER: "MX",
+    LEC: "MC", SAI: "ES",
+    HAM: "GB", RUS: "GB",
+    NOR: "GB", PIA: "AU",
+    ALO: "ES", STR: "CA",
+    GAS: "FR", OCO: "FR",
+    ALB: "TH", COL: "AR", SAR: "US",
+    TSU: "JP", RIC: "AU", LAW: "NZ",
+    HUL: "DE", MAG: "DK", BEA: "GB",
+    BOT: "FI", ZHO: "CN",
+    ANT: "IT", DOO: "AU",
+  },
   compoundColors: {
     SOFT: "#ff3737",
     MEDIUM: "#ffd633",
