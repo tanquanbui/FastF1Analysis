@@ -16,22 +16,26 @@ TABLE_NAME = os.environ["TABLE_NAME"]
 table = _dynamodb.Table(TABLE_NAME)
 
 
-def query_by_pk(pk: str, sk_prefix: str | None = None, limit: int = 1000) -> list[dict[str, Any]]:
-    """Query DynamoDB by partition key; optionally filter SK by prefix."""
+def query_by_pk(pk: str, sk_prefix: str | None = None, limit: int = 5000) -> list[dict[str, Any]]:
+    """Query DynamoDB by partition key; optionally filter SK by prefix.
+
+    Paginates until the partition is exhausted or ``limit`` items are returned.
+    Default limit is 5000 — large enough to fit a full race (results + ~1500
+    laps + team metrics + standings would all live under one PK).
+    """
     key_cond = Key("PK").eq(pk)
     if sk_prefix:
         key_cond = key_cond & Key("SK").begins_with(sk_prefix)
     items: list[dict[str, Any]] = []
-    response = table.query(KeyConditionExpression=key_cond, Limit=limit)
+    response = table.query(KeyConditionExpression=key_cond)
     items.extend(response.get("Items", []))
     while response.get("LastEvaluatedKey") and len(items) < limit:
         response = table.query(
             KeyConditionExpression=key_cond,
             ExclusiveStartKey=response["LastEvaluatedKey"],
-            Limit=limit,
         )
         items.extend(response.get("Items", []))
-    return [decimalify(item) for item in items]
+    return [decimalify(item) for item in items[:limit]]
 
 
 def query_index(index_name: str, partition_attr: str, partition_value: str, limit: int = 1000) -> list[dict[str, Any]]:
