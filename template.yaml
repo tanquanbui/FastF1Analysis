@@ -215,10 +215,15 @@ Resources:
   IngestionFunction:
     Type: AWS::Serverless::Function
     Condition: DataPipelineEnabled
+    Metadata:
+      Dockerfile: Dockerfile
+      DockerContext: ./functions/ingestion
+      DockerTag: latest
     Properties:
       FunctionName: !Sub "pitstop-ingestion-${Environment}"
-      CodeUri: functions/ingestion/
-      Handler: app.handler
+      PackageType: Image
+      # fastf1 + pandas + scipy + pyarrow exceed the 250MB zip Lambda limit,
+      # so we ship as a container image (10GB ECR limit instead).
       MemorySize: 1024
       Timeout: 600
       EphemeralStorage:
