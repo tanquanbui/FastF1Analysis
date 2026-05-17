@@ -116,22 +116,67 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         )
         team_reports.append(report)
 
-    # Re-rank reports by compatibility so the predicted positions are distinct
-    # 1..10 instead of every team landing in the same heuristic bucket.
-    team_reports.sort(
-        key=lambda r: -(r.get("track_compatibility", {}).get("overall_score") or 0),
-    )
+    # ----- Build a combined score per team from 3 real signals -----
+    # The fingerprint-only ranking gave RBR ~37 and ALP ~33 → not enough
+    # separation. We blend it with two history-based signals.
+    history_year = year - 1
+    recent_window = list(range(max(1, round_number - 5), round_number))
+
+    for report in team_reports:
+        team_code = report["team_code"]
+        compat = float(report.get("track_compatibility", {}).get("overall_score") or 0)
+
+        # 1. Historical points at this same round in prior season.
+        historical_pts = _avg_team_points([history_year], [round_number], team_code)
+        historical_score = _points_to_score(historical_pts)
+
+        # 2. Recent form — avg team points across the last 5 rounds this season.
+        recent_pts = _avg_team_points([year], recent_window, team_code)
+        recent_score = _points_to_score(recent_pts)
+
+        # 3. Track fit — already 0-100.
+        track_score = compat
+
+        # Weighted blend. If a signal is missing (== 0), redistribute weight.
+        weights = {
+            "historical": 0.45 if historical_pts > 0 else 0,
+            "recent": 0.35 if recent_pts > 0 else 0,
+            "track": 0.20,
+        }
+        total_w = sum(weights.values()) or 1
+        weights = {k: v / total_w for k, v in weights.items()}
+
+        combined = (
+            historical_score * weights["historical"]
+            + recent_score * weights["recent"]
+            + track_score * weights["track"]
+        )
+
+        report["score_breakdown"] = {
+            "combined": round(combined, 1),
+            "historical_at_circuit": round(historical_score, 1),
+            "recent_form": round(recent_score, 1),
+            "track_fit": round(track_score, 1),
+            "weights": {k: round(v, 2) for k, v in weights.items()},
+            "historical_avg_points": round(historical_pts, 1),
+            "recent_avg_points": round(recent_pts, 1),
+        }
+
+    # Now rank by the combined score.
+    team_reports.sort(key=lambda r: -r["score_breakdown"]["combined"])
     for idx, report in enumerate(team_reports):
         rank = idx + 1
-        # Wider band for back-of-grid teams.
         band = 1 if rank <= 2 else (2 if rank <= 5 else 4)
         race = report.setdefault("prediction", {}).setdefault("race", {})
         race["predicted_position"] = rank
         race["position_range"] = [max(1, rank - band), min(20, rank + band)]
+        race["confidence"] = round(report["score_breakdown"]["combined"] / 100, 3)
+        b = report["score_breakdown"]
         race["model_reasoning"] = (
-            f"Ranked #{rank} of {len(team_reports)} on circuit fit "
-            f"({report['track_compatibility']['overall_score']:.1f}/100). "
-            "Compatibility-only ranking; XGBoost model not yet trained."
+            f"#{rank} of {len(team_reports)} on combined score {b['combined']}/100 "
+            f"(history-at-circuit {b['historical_at_circuit']}, "
+            f"recent form {b['recent_form']}, "
+            f"track fit {b['track_fit']})."
         )
 
     # Season-wide Monte Carlo runs once per invocation.
@@ -229,6 +274,35 @@ def _load_standings(year: int, round_number: int) -> dict[str, list[dict[str, An
         "drivers": [i for i in items if i["SK"].startswith("DRIVER#")],
         "constructors": [i for i in items if i["SK"].startswith("CONSTRUCTOR#")],
     }
+
+
+def _avg_team_points(years: list[int], rounds: list[int], team_code: str) -> float:
+    """Mean points scored by ``team_code`` across the given (year, round)
+    pairs. Sums both drivers' points; zero is returned for rounds where the
+    team didn't race or no data is in DynamoDB."""
+    total = 0.0
+    races = 0
+    for year in years:
+        for r in rounds:
+            response = table.query(
+                KeyConditionExpression=Key("PK").eq(f"RACE#{year}#{r}") & Key("SK").begins_with("RESULT#"),
+            )
+            items = response.get("Items", [])
+            if not items:
+                continue
+            races += 1
+            for item in items:
+                if item.get("TeamCode") == team_code:
+                    total += float(item.get("Points") or 0)
+    return total / races if races else 0.0
+
+
+def _points_to_score(avg_points: float, max_per_race: float = 44.0) -> float:
+    """Map avg team points per race onto a 0-100 score. 44 ≈ 1-2 finish
+    with fastest lap (25 + 18 + 1). Capped at 100."""
+    if avg_points <= 0:
+        return 0.0
+    return min(100.0, (avg_points / max_per_race) * 100)
 
 
 def _points_gap(constructors: list[dict[str, Any]], team_code: str) -> int:
