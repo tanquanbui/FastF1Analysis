@@ -1,6 +1,6 @@
 import { config } from "./config.js";
 import { api } from "./api.js";
-import { renderLapTimesChart } from "./charts/lapTimes.js";
+import { renderLapTimesChart, renderRaceProgression } from "./charts/lapTimes.js";
 import { renderTyreStrategyChart } from "./charts/tyreStrategy.js";
 import { renderSectorTimesChart } from "./charts/sectorTimes.js";
 import { renderConstructorStandingsChart, renderDriverStandingsChart } from "./charts/standings.js";
@@ -160,7 +160,14 @@ async function pageRace(year, round) {
       </section>
 
       <section class="card section-row">
-        <h2>Race progression</h2>
+        <div class="section-head">
+          <h2>Race progression</h2>
+          <div class="view-toggle" id="progression-toggle">
+            <button data-view="position" class="active">Position</button>
+            <button data-view="gap">Gap to winner</button>
+            <button data-view="pace">Stint pace</button>
+          </div>
+        </div>
         <div class="chart-container chart-tall"><canvas id="lap-chart"></canvas></div>
       </section>
 
@@ -174,9 +181,19 @@ async function pageRace(year, round) {
         <div class="chart-container chart-tall"><canvas id="sector-chart"></canvas></div>
       </section>
     `;
-    renderLapTimesChart("lap-chart", data.laps || []);
+    renderRaceProgression("lap-chart", data.laps || [], "position");
     renderTyreStrategyChart("tyre-chart", data.laps || []);
     renderSectorTimesChart("sector-chart", data.laps || []);
+
+    // View toggle for the race-progression chart.
+    document.querySelectorAll("#progression-toggle button").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        document
+          .querySelectorAll("#progression-toggle button")
+          .forEach((b) => b.classList.toggle("active", b === btn));
+        renderRaceProgression("lap-chart", data.laps || [], btn.dataset.view);
+      });
+    });
   } catch (e) {
     setError(e);
   }
