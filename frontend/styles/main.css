@@ -505,6 +505,41 @@ main {
   background: rgba(245, 165, 36, 0.12);
 }
 
+/* ---------- predictor ---------- */
+.predictor-cols {
+  grid-template-columns: 1fr 1fr;
+}
+
+.predictor-table th,
+.predictor-table td {
+  padding: 8px 10px;
+  font-size: 13px;
+}
+
+.conf-bar {
+  display: block;
+  height: 4px;
+  background: var(--bg-elev);
+  border-radius: 2px;
+  overflow: hidden;
+  width: 100%;
+  min-width: 60px;
+}
+
+.conf-bar span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), #ff5e7a);
+}
+
+.metric-big {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  margin: 0;
+}
+
 /* ---------- fingerprint dimension bars ---------- */
 .dimension-bar {
   display: grid;

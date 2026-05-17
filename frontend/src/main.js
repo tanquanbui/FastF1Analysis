@@ -318,6 +318,189 @@ async function pagePredictions(year = config.currentSeason, round) {
   }
 }
 
+// --- 2024 calendar mapping (round -> human label) ---
+const CALENDAR_2024 = {
+  1: "Bahrain", 2: "Saudi Arabia", 3: "Australia", 4: "Japan", 5: "China",
+  6: "Miami", 7: "Emilia-Romagna", 8: "Monaco", 9: "Canada", 10: "Spain",
+  11: "Austria", 12: "Great Britain", 13: "Hungary", 14: "Belgium", 15: "Netherlands",
+  16: "Italy", 17: "Azerbaijan", 18: "Singapore", 19: "United States", 20: "Mexico",
+  21: "São Paulo", 22: "Las Vegas", 23: "Qatar", 24: "Abu Dhabi",
+};
+
+async function pagePredictor(year = config.currentSeason, round) {
+  updateNavActive("predictor");
+
+  // Skeleton + selector first so the UX feels instant.
+  const selectedRound = Number(round) || 6;
+  const rounds = Array.from({ length: 23 }, (_, i) => i + 2); // can backtest from round 2 onwards
+  const options = rounds
+    .map((r) => `<option value="${r}" ${r === selectedRound ? "selected" : ""}>R${r} · ${CALENDAR_2024[r] || `Round ${r}`}</option>`)
+    .join("");
+
+  app.innerHTML = `
+    <h1 class="page-title">Predictor</h1>
+    <p class="page-subtitle">Pick a 2024 race — we'll predict it using only data from rounds before it, then compare to what actually happened.</p>
+    <div class="toolbar">
+      <label>Target race
+        <select id="predictor-round">${options}</select>
+      </label>
+    </div>
+    <div id="predictor-result"></div>
+  `;
+
+  document.getElementById("predictor-round").addEventListener("change", (e) => {
+    navigate(`/predictor/${year}/${e.target.value}`);
+  });
+
+  await renderPredictorComparison(year, selectedRound);
+}
+
+async function renderPredictorComparison(year, round) {
+  const out = document.getElementById("predictor-result");
+  out.innerHTML = `
+    <div class="loader" style="min-height:200px">
+      <div class="spinner"></div>
+      <p>Running prediction with data from rounds 1-${round - 1}…</p>
+    </div>`;
+
+  try {
+    const [pred, actual] = await Promise.all([
+      api.getPredictions(year, round).catch(() => ({ team_reports: [] })),
+      api.getRaceDetail(year, round).catch(() => ({ results: [] })),
+    ]);
+
+    if (!pred.team_reports || pred.team_reports.length === 0) {
+      out.innerHTML = `
+        <div class="card section-row">
+          <p style="color:var(--text-muted)">
+            No prediction available for ${year} R${round} yet. The model needs to be primed
+            first — it runs as a background job that aggregates the prior rounds.
+          </p>
+        </div>`;
+      return;
+    }
+
+    // Predicted team ranking (one row per team).
+    const predicted = [...pred.team_reports].sort(
+      (a, b) =>
+        (a.prediction?.race?.predicted_position ?? 99) -
+        (b.prediction?.race?.predicted_position ?? 99),
+    );
+
+    // Build the actual finishing order — group results by team, take each team's
+    // best finisher.
+    const teamBest = new Map();
+    for (const r of actual.results || []) {
+      const code = r.TeamCode;
+      const pos = r.Position;
+      if (!code || pos == null) continue;
+      if (!teamBest.has(code) || pos < teamBest.get(code).Position) {
+        teamBest.set(code, r);
+      }
+    }
+    const actualRanking = Array.from(teamBest.values()).sort(
+      (a, b) => (a.Position ?? 99) - (b.Position ?? 99),
+    );
+
+    // Accuracy metrics.
+    const predRank = predicted.map((p) => p.team_code);
+    const actualRank = actualRanking.map((r) => r.TeamCode);
+    const top3Hits = predRank.slice(0, 3).filter((t) => actualRank.slice(0, 3).includes(t)).length;
+    const winnerHit = predRank[0] === actualRank[0];
+    const meanAbsErr = mean(
+      predRank.map((team, i) => Math.abs(i - actualRank.indexOf(team))).filter((v) => Number.isFinite(v)),
+    );
+
+    out.innerHTML = `
+      <div class="grid cols-2 predictor-cols">
+        <section class="card section-row">
+          <h2>Predicted</h2>
+          <p class="muted-h3">Using rounds 1-${round - 1} as training data</p>
+          <table class="results-table predictor-table">
+            <thead><tr><th>Rank</th><th>Team</th><th>Conf</th></tr></thead>
+            <tbody>
+              ${predicted
+                .slice(0, 10)
+                .map((p, i) => predictorRow(i + 1, p.team_code, p.prediction?.race?.confidence ?? 0))
+                .join("")}
+            </tbody>
+          </table>
+        </section>
+        <section class="card section-row">
+          <h2>Actual</h2>
+          <p class="muted-h3">${CALENDAR_2024[round] || `Round ${round}`} ${year} result</p>
+          <table class="results-table predictor-table">
+            <thead><tr><th>Pos</th><th>Team</th><th>Driver</th></tr></thead>
+            <tbody>
+              ${actualRanking
+                .slice(0, 10)
+                .map((r) => actualRow(r))
+                .join("")}
+            </tbody>
+          </table>
+        </section>
+      </div>
+      <section class="card section-row">
+        <h2>Accuracy</h2>
+        <div class="grid cols-stats">
+          <div>
+            <p class="muted-h3">Winner</p>
+            <p class="metric-big">${winnerHit ? "✓ Correct" : "✗ Miss"}</p>
+          </div>
+          <div>
+            <p class="muted-h3">Podium hits</p>
+            <p class="metric-big">${top3Hits}/3</p>
+          </div>
+          <div>
+            <p class="muted-h3">Mean position error</p>
+            <p class="metric-big">${meanAbsErr.toFixed(1)}</p>
+          </div>
+        </div>
+      </section>
+    `;
+  } catch (e) {
+    out.innerHTML = `<section class="error">Prediction failed: ${e.message}</section>`;
+  }
+}
+
+function predictorRow(rank, code, confidence) {
+  const team = config.teamNames[code] || code;
+  const color = config.teamColors[code] || "#8e8e9c";
+  const confPct = Math.round((confidence ?? 0) * 100);
+  return `
+    <tr>
+      <td class="pos-cell">${rank}</td>
+      <td>
+        <span class="team-swatch" style="background:${color}"></span>
+        <span class="team-name">${team}</span>
+      </td>
+      <td><div class="conf-bar"><span style="width:${confPct}%"></span></div></td>
+    </tr>`;
+}
+
+function actualRow(r) {
+  const flag = flagFor(config.driverCountry[r.DriverCode]);
+  const team = config.teamNames[r.TeamCode] || r.TeamCode;
+  const color = config.teamColors[r.TeamCode] || "#8e8e9c";
+  return `
+    <tr>
+      <td class="pos-cell">${r.Position ?? "—"}</td>
+      <td>
+        <span class="team-swatch" style="background:${color}"></span>
+        <span class="team-name">${team}</span>
+      </td>
+      <td class="driver-cell">
+        <span class="flag">${flag}</span>
+        <span class="driver-name">${r.DriverName || r.DriverCode}</span>
+      </td>
+    </tr>`;
+}
+
+function mean(arr) {
+  if (!arr.length) return 0;
+  return arr.reduce((a, b) => a + b, 0) / arr.length;
+}
+
 async function pageChampionship(year = config.currentSeason) {
   setLoading("Loading title scenarios…");
   updateNavActive("championship");
@@ -372,6 +555,8 @@ function dispatch() {
       return pageCircuit(args[0]);
     case "predictions":
       return pagePredictions(args[0], args[1]);
+    case "predictor":
+      return pagePredictor(args[0], args[1]);
     case "championship":
       return pageChampionship(args[0]);
     default:
