@@ -74,10 +74,10 @@ export function render3DTrack({
 
   const composer = new EffectComposer(renderer);
   composer.addPass(new RenderPass(scene, camera));
-  const bloom = new UnrealBloomPass(new THREE.Vector2(width, height), 0.85, 0.45, 0.12);
-  bloom.threshold = 0.02;
-  bloom.strength = 0.95;
-  bloom.radius = 0.7;
+  const bloom = new UnrealBloomPass(new THREE.Vector2(width, height), 0.45, 0.6, 0.4);
+  bloom.threshold = 0.7;   // only let the brightest things bloom
+  bloom.strength = 0.5;
+  bloom.radius = 0.45;
   composer.addPass(bloom);
   composer.addPass(new OutputPass());
 
@@ -157,11 +157,24 @@ export function render3DTrack({
   ground.receiveShadow = true;
   scene.add(ground);
 
-  // ---------- sample path ----------
-  const samples2D = samplePath(track.path, SAMPLES);
-  const cx = samples2D.reduce((a, p) => a + p.x, 0) / samples2D.length;
-  const cy = samples2D.reduce((a, p) => a + p.y, 0) / samples2D.length;
-  const samples = samples2D.map((p) => ({ x: p.x - cx, y: p.y - cy }));
+  // ---------- sample path + smooth via Catmull-Rom ----------
+  const rawSamples = samplePath(track.path, 200);
+  const cx = rawSamples.reduce((a, p) => a + p.x, 0) / rawSamples.length;
+  const cy = rawSamples.reduce((a, p) => a + p.y, 0) / rawSamples.length;
+  // Build a Catmull-Rom curve through the raw samples, then re-sample at
+  // high resolution. This rounds out the hand-drawn SVG zig-zags so the
+  // resulting track looks like a real circuit, not a polygon trace.
+  const smoothCurve = new THREE.CatmullRomCurve3(
+    rawSamples.map((p) => new THREE.Vector3(p.x - cx, 0, p.y - cy)),
+    true,
+    "catmullrom",
+    0.5,
+  );
+  const samples = [];
+  for (let i = 0; i < SAMPLES; i++) {
+    const pt = smoothCurve.getPointAt(i / SAMPLES);
+    samples.push({ x: pt.x, y: pt.z });
+  }
   const tangents = samples.map((p, i) => {
     const n = samples[(i + 1) % samples.length];
     const dx = n.x - p.x;
@@ -170,11 +183,20 @@ export function render3DTrack({
     return { x: dx / len, y: dy / len };
   });
 
+  // Pre-compute curvature so we can decide where to draw kerbs (corners
+  // only — straights stay flat just like a real circuit).
+  const curvature = tangents.map((tg, i) => {
+    const next = tangents[(i + 1) % tangents.length];
+    return Math.abs(tg.x * next.y - tg.y * next.x); // cross product magnitude
+  });
+
   // ---------- road surface ----------
+  // Realistic dark asphalt with a very faint sector wash. No DRS recolour
+  // (we used to paint big bright green sections; cleaner to use signage).
   const sectorRGB = {
-    1: new THREE.Color(0xff1e54),
+    1: new THREE.Color(0xff3055),
     2: new THREE.Color(0xff9020),
-    3: new THREE.Color(0x35a3ff),
+    3: new THREE.Color(0x4aa3ff),
   };
   const roadGeom = new THREE.BufferGeometry();
   const roadPositions = [];
@@ -186,19 +208,15 @@ export function render3DTrack({
     const nx = -tg.y, nz = tg.x;
     const t = i / samples.length;
     const sector = sectorAt(t, track.sectors);
-    const inDrs = isInDrs(t, samples, track.drs, cx, cy);
     const tint = sectorRGB[sector.id];
     roadPositions.push(
       p.x + nx * (ROAD_WIDTH / 2), 0, p.y + nz * (ROAD_WIDTH / 2),
       p.x - nx * (ROAD_WIDTH / 2), 0, p.y - nz * (ROAD_WIDTH / 2),
     );
-    let r, g, b;
-    if (inDrs) { r = 0.05; g = 0.95; b = 0.35; }
-    else {
-      r = 0.04 + tint.r * 0.05;
-      g = 0.04 + tint.g * 0.05;
-      b = 0.06 + tint.b * 0.06;
-    }
+    // Asphalt grey base (#1a1a22 ≈ rgb 0.10, 0.10, 0.13) with 5% sector tint.
+    const r = 0.11 + tint.r * 0.025;
+    const g = 0.11 + tint.g * 0.025;
+    const b = 0.135 + tint.b * 0.03;
     roadColors.push(r, g, b, r, g, b);
   }
   for (let i = 0; i < samples.length; i++) {
@@ -212,62 +230,73 @@ export function render3DTrack({
   roadGeom.setIndex(roadIndices);
   roadGeom.computeVertexNormals();
   const road = new THREE.Mesh(roadGeom, new THREE.MeshStandardMaterial({
-    vertexColors: true, metalness: 0.55, roughness: 0.4, envMapIntensity: 0.5,
+    vertexColors: true, metalness: 0.15, roughness: 0.85, envMapIntensity: 0.35,
   }));
   road.receiveShadow = true;
   scene.add(road);
 
-  // ---------- neon edge ribbons ----------
+  // ---------- white painted boundary lines (replaces neon edges) ----------
+  const lineMat = new THREE.MeshBasicMaterial({ color: 0xeeeeee, toneMapped: true });
   for (const side of [1, -1]) {
-    const edgePositions = [];
-    const edgeColors = [];
-    const edgeIndices = [];
-    const edgeCol = side === 1 ? new THREE.Color("#22d3ee") : new THREE.Color("#ff007a");
+    const lp = [], li = [];
     for (let i = 0; i < samples.length; i++) {
       const p = samples[i];
       const tg = tangents[i];
       const nx = -tg.y, nz = tg.x;
-      const inner = ROAD_WIDTH / 2 + 0.3;
-      const outer = inner + 0.5;
-      edgePositions.push(
-        p.x + nx * inner * side, 0.05, p.y + nz * inner * side,
-        p.x + nx * outer * side, 0.05, p.y + nz * outer * side,
+      const inner = ROAD_WIDTH / 2 - 0.15;
+      const outer = inner + 0.2;
+      lp.push(
+        p.x + nx * inner * side, 0.02, p.y + nz * inner * side,
+        p.x + nx * outer * side, 0.02, p.y + nz * outer * side,
       );
-      edgeColors.push(edgeCol.r, edgeCol.g, edgeCol.b, edgeCol.r, edgeCol.g, edgeCol.b);
     }
     for (let i = 0; i < samples.length; i++) {
       const i0 = i * 2, i1 = i * 2 + 1;
       const j0 = ((i + 1) % samples.length) * 2;
       const j1 = ((i + 1) % samples.length) * 2 + 1;
-      edgeIndices.push(i0, j0, j1, i0, j1, i1);
+      li.push(i0, j0, j1, i0, j1, i1);
     }
-    const eg = new THREE.BufferGeometry();
-    eg.setAttribute("position", new THREE.Float32BufferAttribute(edgePositions, 3));
-    eg.setAttribute("color", new THREE.Float32BufferAttribute(edgeColors, 3));
-    eg.setIndex(edgeIndices);
-    scene.add(new THREE.Mesh(eg, new THREE.MeshBasicMaterial({
-      vertexColors: true, toneMapped: false,
-    })));
+    const lg = new THREE.BufferGeometry();
+    lg.setAttribute("position", new THREE.Float32BufferAttribute(lp, 3));
+    lg.setIndex(li);
+    scene.add(new THREE.Mesh(lg, lineMat));
   }
 
-  // ---------- kerbs ----------
+  // ---------- kerbs (corners only, fade in/out based on curvature) ----------
+  // Smooth the curvature signal so kerbs fade in/out naturally.
+  const kerbWeight = new Array(samples.length);
+  for (let i = 0; i < samples.length; i++) {
+    let acc = 0;
+    for (let k = -8; k <= 8; k++) {
+      acc += curvature[(i + k + samples.length) % samples.length];
+    }
+    kerbWeight[i] = Math.min(1, acc * 12);
+  }
   for (const side of [1, -1]) {
     const kpos = [], kcol = [], kidx = [];
     for (let i = 0; i < samples.length; i++) {
       const p = samples[i];
       const tg = tangents[i];
       const nx = -tg.y, nz = tg.x;
-      const inner = ROAD_WIDTH / 2 + 1.1;
+      const inner = ROAD_WIDTH / 2 + 0.4;
       const outer = inner + KERB_WIDTH;
       kpos.push(
-        p.x + nx * inner * side, 0.16, p.y + nz * inner * side,
-        p.x + nx * outer * side, 0.16, p.y + nz * outer * side,
+        p.x + nx * inner * side, 0.12, p.y + nz * inner * side,
+        p.x + nx * outer * side, 0.12, p.y + nz * outer * side,
       );
-      const stripe = Math.floor(i / 7) % 2 === 0;
-      const cr = stripe ? 0.85 : 0.95;
-      const cg = stripe ? 0.05 : 0.95;
-      const cb = stripe ? 0.18 : 0.95;
-      kcol.push(cr, cg, cb, cr, cg, cb);
+      // Only "paint" the kerb where the track is actually curving — and
+      // even then, alternate red/white stripes.
+      const w = kerbWeight[i];
+      const stripe = Math.floor(i / 6) % 2 === 0;
+      // base = dark asphalt, blended toward red/white by `w`.
+      let baseR = 0.11, baseG = 0.11, baseB = 0.13;
+      let topR, topG, topB;
+      if (stripe) { topR = 0.88; topG = 0.04; topB = 0.12; }
+      else { topR = 0.95; topG = 0.95; topB = 0.95; }
+      const r = baseR + (topR - baseR) * w;
+      const g = baseG + (topG - baseG) * w;
+      const b = baseB + (topB - baseB) * w;
+      kcol.push(r, g, b, r, g, b);
     }
     for (let i = 0; i < samples.length; i++) {
       const i0 = i * 2, i1 = i * 2 + 1;
@@ -280,76 +309,104 @@ export function render3DTrack({
     kg.setAttribute("color", new THREE.Float32BufferAttribute(kcol, 3));
     kg.setIndex(kidx);
     kg.computeVertexNormals();
-    const kerb = new THREE.Mesh(kg, new THREE.MeshStandardMaterial({
-      vertexColors: true, roughness: 0.6, metalness: 0.2,
-    }));
-    kerb.receiveShadow = true;
-    scene.add(kerb);
+    scene.add(new THREE.Mesh(kg, new THREE.MeshStandardMaterial({
+      vertexColors: true, roughness: 0.7, metalness: 0.1,
+    })));
   }
 
-  // sector orbs on towers
+  // sector boundary markers (white tick across the track + small side post)
   for (const s of track.sectors) {
     const idx = Math.floor(s.from * samples.length);
     const p = samples[idx];
     const tg = tangents[idx];
+    const tick = new THREE.Mesh(
+      new THREE.BoxGeometry(ROAD_WIDTH + 1.5, 0.04, 0.6),
+      new THREE.MeshBasicMaterial({ color: 0xeeeeee, toneMapped: true }),
+    );
+    tick.position.set(p.x, 0.04, p.y);
+    tick.rotation.y = Math.atan2(tg.x, tg.y);
+    scene.add(tick);
+    // Small side post that's the sector colour, not the entire road.
     const nx = -tg.y, nz = tg.x;
     const color = sectorRGB[s.id];
     for (const side of [1, -1]) {
-      const x = p.x + nx * (ROAD_WIDTH / 2 + 6) * side;
-      const z = p.y + nz * (ROAD_WIDTH / 2 + 6) * side;
-      const tower = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.6, 0.8, 26, 12),
-        new THREE.MeshStandardMaterial({ color: 0x05050a, metalness: 0.7, roughness: 0.35 }),
+      const post = new THREE.Mesh(
+        new THREE.BoxGeometry(0.6, 5, 0.6),
+        new THREE.MeshStandardMaterial({
+          color, emissive: color, emissiveIntensity: 0.6,
+        }),
       );
-      tower.position.set(x, 13, z);
-      tower.castShadow = true;
-      scene.add(tower);
-      const orb = new THREE.Mesh(
-        new THREE.SphereGeometry(1.8, 24, 24),
-        new THREE.MeshBasicMaterial({ color, toneMapped: false }),
+      post.position.set(
+        p.x + nx * (ROAD_WIDTH / 2 + 2.5) * side,
+        2.5,
+        p.y + nz * (ROAD_WIDTH / 2 + 2.5) * side,
       );
-      orb.position.set(x, 27, z);
-      scene.add(orb);
+      scene.add(post);
     }
   }
 
-  // DRS signage
+  // DRS gantry sign (stand + plate; no road colouring)
   for (const drs of track.drs || []) {
     const midX = (drs.from[0] + drs.to[0]) / 2 - cx;
     const midY = (drs.from[1] + drs.to[1]) / 2 - cy;
+    // Find the track-side normal so the sign sits next to the road.
+    let nearest = 0, best = Infinity;
+    for (let i = 0; i < samples.length; i++) {
+      const dx = samples[i].x - midX, dz = samples[i].y - midY;
+      const d = dx * dx + dz * dz;
+      if (d < best) { best = d; nearest = i; }
+    }
+    const tg = tangents[nearest];
+    const nx = -tg.y, nz = tg.x;
+    const sx = samples[nearest].x + nx * (ROAD_WIDTH / 2 + 3);
+    const sz = samples[nearest].y + nz * (ROAD_WIDTH / 2 + 3);
     const stand = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.35, 0.35, 28, 8),
-      new THREE.MeshStandardMaterial({ color: 0x06060f, metalness: 0.7, roughness: 0.3 }),
+      new THREE.CylinderGeometry(0.18, 0.18, 9, 8),
+      new THREE.MeshStandardMaterial({ color: 0x202028, metalness: 0.6, roughness: 0.4 }),
     );
-    stand.position.set(midX, 14, midY);
+    stand.position.set(sx, 4.5, sz);
     scene.add(stand);
     const plate = new THREE.Mesh(
-      new THREE.BoxGeometry(20, 5.5, 1.2),
-      new THREE.MeshBasicMaterial({ color: 0x00ff66, toneMapped: false }),
+      new THREE.BoxGeometry(6, 2.2, 0.4),
+      new THREE.MeshStandardMaterial({
+        color: 0x00cc55, emissive: 0x00cc55, emissiveIntensity: 1.1,
+      }),
     );
-    plate.position.set(midX, 30, midY);
+    plate.position.set(sx, 10, sz);
+    plate.rotation.y = Math.atan2(tg.x, tg.y);
     scene.add(plate);
   }
 
-  // overtake braking bars
+  // braking markers: small "100m" boards next to overtake spots
   for (const ot of track.overtake_spots || []) {
     const x = ot.x - cx;
     const z = ot.y - cy;
-    let nearest = 0;
-    let best = Infinity;
+    let nearest = 0, best = Infinity;
     for (let i = 0; i < samples.length; i++) {
       const dx = samples[i].x - x, dz = samples[i].y - z;
       const d = dx * dx + dz * dz;
       if (d < best) { best = d; nearest = i; }
     }
     const tg = tangents[nearest];
-    const bar = new THREE.Mesh(
-      new THREE.BoxGeometry(ROAD_WIDTH + 5, 0.5, 1.6),
-      new THREE.MeshBasicMaterial({ color: 0xff1144, toneMapped: false }),
+    const nx = -tg.y, nz = tg.x;
+    // Small board just outside the kerb.
+    const bx = samples[nearest].x + nx * (ROAD_WIDTH / 2 + 4);
+    const bz = samples[nearest].y + nz * (ROAD_WIDTH / 2 + 4);
+    const stand = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.12, 0.12, 4, 6),
+      new THREE.MeshStandardMaterial({ color: 0x222229, metalness: 0.6 }),
     );
-    bar.position.set(x, 0.4, z);
-    bar.rotation.y = Math.atan2(tg.x, tg.y);
-    scene.add(bar);
+    stand.position.set(bx, 2, bz);
+    scene.add(stand);
+    const board = new THREE.Mesh(
+      new THREE.BoxGeometry(2.6, 1.4, 0.3),
+      new THREE.MeshStandardMaterial({
+        color: 0xffd400, emissive: 0xffd400, emissiveIntensity: 0.4,
+      }),
+    );
+    board.position.set(bx, 4.5, bz);
+    board.rotation.y = Math.atan2(tg.x, tg.y);
+    scene.add(board);
   }
 
   // start/finish chequered band
