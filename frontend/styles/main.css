@@ -888,6 +888,62 @@ main {
   color: var(--text-muted);
 }
 
+/* ---------- driver analysis modal extras ---------- */
+.modal-xl {
+  max-width: 1000px;
+}
+
+.track-3d-container {
+  width: 100%;
+  height: 360px;
+  border-radius: var(--radius-sm);
+  background: #0a0a0f;
+  overflow: hidden;
+  margin-top: 8px;
+}
+
+.track-3d-container canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+  cursor: grab;
+}
+
+.track-3d-container canvas:active {
+  cursor: grabbing;
+}
+
+.analysis-prose p {
+  margin: 0 0 12px;
+  line-height: 1.65;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.analysis-prose p.muted {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.analysis-prose strong {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.analysis-prose .verdict-line {
+  margin-top: 16px;
+  padding: 12px 14px;
+  background: rgba(232, 0, 45, 0.1);
+  border-left: 3px solid var(--accent);
+  border-radius: 4px;
+}
+
+.reasoning-prose {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
 /* ---------- fingerprint dimension bars ---------- */
 .dimension-bar {
   display: grid;

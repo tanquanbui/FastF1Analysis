@@ -2,6 +2,7 @@ import { config } from "./config.js";
 import { api } from "./api.js";
 import { renderLapTimesChart, renderRaceProgression } from "./charts/lapTimes.js";
 import { renderTrackMap } from "./charts/trackMap.js";
+import { render3DTrack } from "./charts/trackMap3D.js";
 import { renderQualifyingViewer } from "./charts/qualifying.js";
 import { CIRCUIT_BY_ROUND, TRACKS } from "./charts/tracks_data.js";
 import { renderTyreStrategyChart } from "./charts/tyreStrategy.js";
@@ -537,6 +538,8 @@ function showDriverAnalysis(d, year, round) {
   const signals = d.Signals || {};
   const weights = d.Weights || {};
   const inputs = d.InputData || {};
+  const circuitKey = CIRCUIT_BY_ROUND[Number(round)] || "monza";
+  const track = TRACKS[circuitKey] || TRACKS.monza;
 
   const signalRows = [
     ["qualifying", "Qualifying", `P${d.QualifyingPosition ?? "—"}`],
@@ -569,9 +572,11 @@ function showDriverAnalysis(d, year, round) {
     })
     .join("");
 
+  const narrative = buildNarrative(d, signals, weights, inputs, track, circuitKey);
+
   const html = `
     <div class="modal-backdrop">
-      <div class="modal">
+      <div class="modal modal-xl">
         <button class="modal-close" aria-label="Close">×</button>
         <div class="modal-header">
           <div>
@@ -593,23 +598,175 @@ function showDriverAnalysis(d, year, round) {
           </div>
         </div>
 
-        <h3 class="muted-h3">Signal breakdown</h3>
-        <div class="signal-list">${signalRows}</div>
+        <h3 class="muted-h3">3D circuit visualisation</h3>
+        <p class="reasoning-prose" style="margin-bottom:14px">
+          Sector elevation = how well this driver's signal profile suits each sector's demands.
+          Dot speed = predicted pace per sector. DRS cones in green, overtake rings in red.
+          Drag to rotate; auto-rotates by default.
+        </p>
+        <div id="driver-3d" class="track-3d-container"></div>
 
-        <h3 class="muted-h3">How the model decided</h3>
-        <ul class="reasoning-list">
-          ${reasoningBullets(signals, weights, inputs).join("")}
-        </ul>
+        <h3 class="muted-h3" style="margin-top:24px">How the model decided</h3>
+        <div class="analysis-prose">
+          ${narrative}
+        </div>
+
+        <h3 class="muted-h3" style="margin-top:22px">Signal breakdown</h3>
+        <div class="signal-list">${signalRows}</div>
       </div>
     </div>`;
   const wrap = document.createElement("div");
   wrap.innerHTML = html;
   document.body.appendChild(wrap);
-  const close = () => wrap.remove();
+
+  // Spin up the 3D scene after the modal is in the DOM.
+  const teardown = render3DTrack({
+    containerId: "driver-3d",
+    circuitKey,
+    driverColor: color,
+    driverCode: code,
+    signals: { ...signals, combined: d.Combined },
+  });
+
+  const close = () => {
+    teardown?.();
+    wrap.remove();
+  };
   wrap.querySelector(".modal-close").addEventListener("click", close);
   wrap.querySelector(".modal-backdrop").addEventListener("click", (e) => {
     if (e.target.classList.contains("modal-backdrop")) close();
   });
+  document.addEventListener("keydown", function escHandler(e) {
+    if (e.key === "Escape") {
+      close();
+      document.removeEventListener("keydown", escHandler);
+    }
+  });
+}
+
+/**
+ * Build the rich narrative explanation. Each paragraph ties one of the
+ * driver's signals to a specific circuit characteristic so the user can
+ * see WHY each input matters here.
+ */
+function buildNarrative(d, signals, weights, inputs, track, circuitKey) {
+  const name = (d.DriverName || d.DriverCode || "this driver").split(" ").pop();
+  const sections = [];
+
+  // Track context — what does this circuit reward?
+  const features = trackHighlights(circuitKey);
+  if (features) {
+    sections.push(`<p><strong>${track.name}</strong> is a ${features.character} circuit. ${features.story}</p>`);
+  }
+
+  // Order signals by contribution.
+  const contribs = Object.entries(signals)
+    .filter(([, v]) => v != null)
+    .map(([k, v]) => ({ key: k, score: v, weight: weights[k] || 0, contrib: v * (weights[k] || 0) }))
+    .sort((a, b) => b.contrib - a.contrib);
+
+  // Top 3 contributors get a paragraph each.
+  for (const c of contribs.slice(0, 3)) {
+    const para = signalParagraph(c.key, c.score, c.weight, c.contrib, inputs, name, features);
+    if (para) sections.push(`<p>${para}</p>`);
+  }
+
+  // Missing signals — note that we redistributed weight.
+  const missing = Object.entries(signals).filter(([, v]) => v == null).map(([k]) => prettyKey(k));
+  if (missing.length) {
+    sections.push(
+      `<p class="muted">Missing inputs: ${missing.join(", ")}. Their weight has been redistributed across the present signals, so the combined score still reads on a 0-100 scale.</p>`,
+    );
+  }
+
+  // Closing verdict line.
+  const final = Math.round(d.Combined ?? 0);
+  const verdict = final >= 75
+    ? `Strong overall profile — most signals lean favourable for this circuit.`
+    : final >= 55
+      ? `Mixed picture: real strengths exist, but at least one major signal is dragging the score down.`
+      : `${name} faces an uphill weekend here on multiple fronts. A recovery drive rather than a podium charge.`;
+  sections.push(`<p class="verdict-line">${verdict} <strong>Combined ${final}/100</strong> → predicted <strong>P${d.PredictedPosition}</strong>.</p>`);
+
+  return sections.join("");
+}
+
+function signalParagraph(key, score, weight, contrib, inputs, name, features) {
+  const wPct = (weight * 100).toFixed(0);
+  const cPct = contrib.toFixed(1);
+  const characterMatters = features?.dominantSignal === key;
+  const emphasis = characterMatters ? ` — exactly the signal this circuit rewards most` : "";
+
+  switch (key) {
+    case "qualifying": {
+      const pos = inputs.qualifying_position ?? "?";
+      return `${name} qualified <strong>P${pos}</strong>. With a ${wPct}% weight on qualifying (the strongest single signal in the model), this alone feeds <strong>${cPct} points</strong> into the combined score${emphasis}. The closer to pole, the more this dominates.`;
+    }
+    case "historical": {
+      const past = (inputs.historical_positions || []);
+      if (past.length === 0) {
+        return `Historical record at this circuit scored ${score.toFixed(1)}/100 (${wPct}% weight → ${cPct} pts).`;
+      }
+      const avgPos = (past.reduce((a, b) => a + b, 0) / past.length).toFixed(1);
+      return `Looking back at the last ${past.length} same-round race${past.length > 1 ? "s" : ""}, ${name} averaged P${avgPos} at this venue. Track-specific history is a strong signal because circuits reward consistent car/driver characteristics year-over-year, so this contributes <strong>${cPct} pts</strong> (${wPct}% weight × ${Math.round(score)}/100)${emphasis}.`;
+    }
+    case "recent_form": {
+      const recent = inputs.recent_positions || [];
+      if (recent.length === 0) {
+        return `Recent form contributed ${cPct} pts (${wPct}% weight × ${Math.round(score)}/100).`;
+      }
+      const avg = recent.reduce((a, b) => a + b, 0) / recent.length;
+      const trend = recent.length >= 2 && recent[recent.length - 1] < recent[0] ? "improving" : recent.length >= 2 && recent[recent.length - 1] > recent[0] ? "drifting" : "steady";
+      return `Last ${recent.length} finishes: ${recent.map((p) => `P${p}`).join(" → ")} (avg P${avg.toFixed(1)}, ${trend}). Recent form picks up upgrades, reliability streaks, and momentum the historical signal can't see — contributes <strong>${cPct} pts</strong>${emphasis}.`;
+    }
+    case "overtaking": {
+      const gains = inputs.grid_to_finish_history || [];
+      if (gains.length === 0) {
+        return `Overtaking skill: ${cPct} pts (${wPct}% weight × ${Math.round(score)}/100).`;
+      }
+      const avg = gains.reduce((a, b) => a + b, 0) / gains.length;
+      const flavour = avg > 1.5 ? "consistent climber" : avg < -1.5 ? "tends to lose positions" : "broadly holds station";
+      return `Grid → finish delta over the last ${gains.length} races: average ${avg > 0 ? "+" : ""}${avg.toFixed(1)} positions per race (${flavour}). This signal matters more on circuits where overtaking is possible. Contributes <strong>${cPct} pts</strong>${emphasis}.`;
+    }
+    case "reliability": {
+      const rate = (inputs.dnf_rate ?? 0) * 100;
+      return `Reliability score: ${Math.round(score)}/100 (DNF rate ${rate.toFixed(0)}% over the last 10 races). A high-DNF tail risk doesn't only show in final position — it depresses the combined score even when raw pace is strong. <strong>${cPct} pts</strong> contributed${emphasis}.`;
+    }
+    case "track_fit": {
+      const fit = inputs.track_fit ?? 0;
+      return `Team fingerprint × this circuit's 8-dimension profile gives a track fit of <strong>${fit.toFixed(1)}/100</strong>. The model weights this at ${wPct}% because raw team capability across speed/cornering/strategy compounds with the rest of the signals. <strong>${cPct} pts</strong>${emphasis}.`;
+    }
+    default:
+      return `${prettyKey(key)} contributed ${cPct} pts (${wPct}% × ${Math.round(score)}/100).`;
+  }
+}
+
+function trackHighlights(circuitKey) {
+  const k = circuitKey.toLowerCase();
+  const map = {
+    monaco: { character: "tight, low-speed street", story: "Overtaking is essentially impossible — pole position wins ~70% of races held here. Qualifying score dominates everything else.", dominantSignal: "qualifying" },
+    monza: { character: "high-speed power", story: "Long straights and minimal corners. DRS trains form easily; straight-line speed and slipstream tactics decide it.", dominantSignal: "track_fit" },
+    silverstone: { character: "high-speed aero", story: "Maggotts-Becketts demand a confidence-inspiring high-speed platform; Stowe rewards composed braking.", dominantSignal: "historical" },
+    spa: { character: "all-rounder, weather-dependent", story: "Eau Rouge–Raidillon flat-out separates the brave. Rain is the wildcard 30% of years.", dominantSignal: "historical" },
+    suzuka: { character: "technical figure-8", story: "S-Curves and 130R reward absolute precision. Engineers' favourite circuit.", dominantSignal: "qualifying" },
+    bahrain: { character: "tyre-management", story: "Three DRS zones make overtaking realistic, but the rear tyres are the limiting factor.", dominantSignal: "track_fit" },
+    abu_dhabi: { character: "modern, season-finale", story: "Reconfigured 2021 layout improved overtaking. Pressure of the finale adds strategic complexity.", dominantSignal: "recent_form" },
+    miami: { character: "permanent street", story: "Mixed slow + fast sections. DRS into T17 is the prime overtake.", dominantSignal: "qualifying" },
+    singapore: { character: "night street", story: "High humidity, 22 corners, safety-car probability ~60%. The most physically demanding race.", dominantSignal: "qualifying" },
+    hungary: { character: "low-speed European Monaco", story: "Twisty, narrow, low-speed cornering rules. Track-position critical.", dominantSignal: "qualifying" },
+  };
+  return map[k] || null;
+}
+
+function prettyKey(k) {
+  return {
+    qualifying: "qualifying",
+    historical: "historical at circuit",
+    recent_form: "recent form",
+    overtaking: "overtaking skill",
+    reliability: "reliability",
+    track_fit: "track fit",
+  }[k] || k;
 }
 
 function reasoningBullets(signals, weights, inputs) {
