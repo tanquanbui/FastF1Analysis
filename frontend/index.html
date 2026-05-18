@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link
-    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap"
     rel="stylesheet"
   />
   <link rel="stylesheet" href="./styles/main.css" />
@@ -15,19 +15,32 @@
 <body>
   <header class="site-header">
     <div class="brand">
-      <span class="logo-mark"></span>
-      <h1>PitStop Analytics</h1>
+      <span class="brand-logo"></span>
+      <div class="brand-text">
+        <span class="brand-line-1">PITSTOP</span>
+        <span class="brand-line-2">ANALYTICS</span>
+      </div>
     </div>
     <nav class="primary-nav">
-      <a href="#/season" data-route="season">Season</a>
-      <a href="#/race" data-route="race">Race</a>
-      <a href="#/standings" data-route="standings">Standings</a>
-      <a href="#/team" data-route="team">Team Intel</a>
-      <a href="#/circuit" data-route="circuit">Circuit</a>
-      <a href="#/predictor" data-route="predictor">Predictor</a>
-      <a href="#/championship" data-route="championship">Title Sim</a>
+      <a href="#/season" data-route="season">SEASON</a>
+      <a href="#/race" data-route="race">RACE</a>
+      <a href="#/standings" data-route="standings">STANDINGS</a>
+      <a href="#/team" data-route="team">TEAM INTEL</a>
+      <a href="#/circuit" data-route="circuit">CIRCUIT</a>
+      <a href="#/predictor" data-route="predictor">PREDICTOR</a>
+      <a href="#/championship" data-route="championship">TITLE SIM</a>
     </nav>
   </header>
+
+  <aside class="f1-lights" aria-hidden="true">
+    <span class="f1-light"></span>
+    <span class="f1-light"></span>
+    <span class="f1-light"></span>
+    <span class="f1-light"></span>
+    <span class="f1-light"></span>
+    <span class="f1-light"></span>
+    <span class="f1-light"></span>
+  </aside>
 
   <main id="app">
     <section class="loader">

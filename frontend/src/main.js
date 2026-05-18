@@ -25,14 +25,27 @@ function setError(error) {
   app.innerHTML = `<section class="error">Could not load: ${error.message}</section>`;
 }
 
+const NAV_ORDER = ["season", "race", "standings", "team", "circuit", "predictor", "championship"];
+
 function updateNavActive(routeName) {
   document.querySelectorAll(".primary-nav a").forEach((a) => {
     a.classList.toggle("is-active", a.dataset.route === routeName);
+  });
+  const activeIdx = NAV_ORDER.indexOf(routeName);
+  document.querySelectorAll(".f1-light").forEach((light, i) => {
+    light.classList.toggle("active", i === activeIdx);
   });
 }
 
 function teamTag(code) {
   return `<span class="tag team-${code}">${code}</span>`;
+}
+
+function fmtLapTime(seconds) {
+  if (seconds == null) return "—";
+  const m = Math.floor(seconds / 60);
+  const s = (seconds - m * 60).toFixed(3);
+  return m > 0 ? `${m}:${s.padStart(6, "0")}` : `${s}s`;
 }
 
 // ---------- pages ----------
@@ -43,9 +56,10 @@ async function pageSeason(year = config.currentSeason) {
   // user knows something is happening — server-side parallel fetch usually
   // returns in <500ms but we want to be polite about long tails.
   app.innerHTML = `
-    <h1 class="page-title">${year} Season</h1>
+    <p class="eyebrow">FORMULA 1 · ${year} · CALENDAR</p>
+    <h1 class="page-title">${year} <span class="accent-soft">Season</span></h1>
     <p class="page-subtitle" id="season-status">
-      <span class="spinner" style="width:14px;height:14px;display:inline-block;vertical-align:-2px;margin-right:6px"></span>
+      <span class="spinner" style="width:12px;height:12px;display:inline-block;vertical-align:-1px;margin-right:8px"></span>
       Fetching season data…
     </p>
     <div class="toolbar">
@@ -75,17 +89,15 @@ async function pageSeason(year = config.currentSeason) {
     // Append cards one at a time with a tiny stagger so big seasons feel
     // smooth instead of slamming into the DOM.
     for (const [i, race] of races.entries()) {
-      const podium = (race.podium || [])
-        .map(
-          (p) => `
-            <div class="podium-row">
-              <span class="pos p${p.position}">${p.position}</span>
-              <span>${p.driver_code || "—"}</span>
-              ${p.team_code ? teamTag(p.team_code) : ""}
-              <span style="margin-left:auto;color:var(--text-muted)">${p.points ?? ""} pts</span>
-            </div>`,
-        )
-        .join("");
+      const raceName = CALENDAR_2024[race.round] || `Round ${race.round}`;
+      const winner = (race.podium || [])[0];
+      const winnerRow = winner
+        ? `<div class="win-row">
+            <span>WIN</span>
+            <span class="driver-code">${winner.driver_code || "—"}</span>
+            ${winner.team_code ? teamTag(winner.team_code) : ""}
+          </div>`
+        : '<div class="win-row" style="color:var(--text-dim)">— no data —</div>';
 
       const card = document.createElement("article");
       card.className = "card race-card";
@@ -93,17 +105,13 @@ async function pageSeason(year = config.currentSeason) {
       card.style.opacity = "0";
       card.style.transition = "opacity 0.25s ease";
       card.innerHTML = `
-        <div class="race-card-header">
-          <div>
-            <p class="round">Round ${race.round}</p>
-            <p class="name">Round ${race.round}</p>
-          </div>
-        </div>
-        <div class="podium">${podium || '<p style="color:var(--text-muted);font-size:13px">No podium data</p>'}</div>`;
+        <span class="status-dot ${winner ? "" : "empty"}"></span>
+        <p class="round">R${String(race.round).padStart(2, "0")}</p>
+        <p class="name">${raceName}</p>
+        ${winnerRow}`;
       card.addEventListener("click", () => navigate(`/race/${year}/${card.dataset.round}`));
       grid.appendChild(card);
 
-      // Stagger fade-in.
       setTimeout(() => (card.style.opacity = "1"), Math.min(i * 20, 600));
     }
   } catch (e) {
@@ -151,9 +159,43 @@ async function pageRace(year, round) {
       })
       .join("");
 
+    const raceName = CALENDAR_2024[Number(round)] || `Round ${round}`;
+    const pole = (data.results || []).find((r) => r.Grid === 1) || (data.results || [])[0];
+    const winner = (data.results || [])[0];
+    const fastestLap = (data.team_metrics || []).reduce((best, t) => {
+      const v = t.BestLapSeconds;
+      if (v != null && (best == null || v < best)) return v;
+      return best;
+    }, null);
+    const second = (data.results || [])[1];
+    const marginMs = winner && second && winner.TimeMillis && second.TimeMillis
+      ? second.TimeMillis - winner.TimeMillis
+      : null;
+    const pitCount = (data.team_metrics || []).reduce((sum, t) => sum + (t.PitStopCount || 0), 0);
+
     app.innerHTML = `
-      <h1 class="page-title">Round ${round} · ${year}</h1>
-      <p class="page-subtitle">${data.results?.length || 0} classified · ${data.laps?.length || 0} lap records · ${data.team_metrics?.length || 0} teams</p>
+      <p class="eyebrow">ROUND ${String(round).padStart(2, "0")} · ${year} · COMPLETED</p>
+      <h1 class="page-title">${raceName}</h1>
+      <p class="page-subtitle">${data.results?.length || 0} CLASSIFIED · ${data.laps?.length || 0} LAP RECORDS · ${data.team_metrics?.length || 0} TEAMS</p>
+
+      <div class="stat-tiles">
+        <div class="stat-tile">
+          <span class="label">Pole</span>
+          <span class="value">${pole?.DriverCode || "—"}</span>
+        </div>
+        <div class="stat-tile">
+          <span class="label">Fastest Lap</span>
+          <span class="value">${fastestLap ? fmtLapTime(fastestLap) : "—"}</span>
+        </div>
+        <div class="stat-tile">
+          <span class="label">Margin</span>
+          <span class="value">${marginMs != null ? `+${(marginMs/1000).toFixed(3)}` : "—"}<span class="unit">s</span></span>
+        </div>
+        <div class="stat-tile">
+          <span class="label">Pit Stops</span>
+          <span class="value">${pitCount || "—"}</span>
+        </div>
+      </div>
 
       <section class="card section-row">
         <h2>Top 10</h2>
@@ -229,8 +271,9 @@ async function pageStandings(year, round) {
   try {
     const data = await api.getStandings(year, round);
     app.innerHTML = `
-      <h1 class="page-title">${year} Standings · Round ${round}</h1>
-      <p class="page-subtitle">As of round ${round}</p>
+      <p class="eyebrow">CHAMPIONSHIP · ${year} · AFTER ROUND ${String(round).padStart(2, "0")}</p>
+      <h1 class="page-title">Season <span class="accent-soft">Standings</span></h1>
+      <p class="page-subtitle">CONSTRUCTORS & DRIVERS · POINTS-WEIGHTED</p>
       <div class="grid cols-2">
         <div class="card">
           <h2>Constructors</h2>
@@ -260,8 +303,9 @@ async function pageTeam(code = "RBR") {
     ]);
 
     app.innerHTML = `
-      <h1 class="page-title">${code} · Team Intelligence</h1>
-      <p class="page-subtitle">${profile.races_completed || 0} races · ${profile.total_points ?? 0} points</p>
+      <p class="eyebrow">TEAM INTELLIGENCE · ${code}</p>
+      <h1 class="page-title">${config.teamNames[code] || code}</h1>
+      <p class="page-subtitle">${profile.races_completed || 0} RACES · ${profile.total_points ?? 0} PTS · 8-DIMENSION FINGERPRINT</p>
       <div class="grid cols-2">
         <div class="card">
           <h2>Performance fingerprint</h2>
@@ -289,8 +333,9 @@ async function pageCircuit(key = "monaco") {
     .join("");
 
   app.innerHTML = `
-    <h1 class="page-title">${trackData.name}</h1>
-    <p class="page-subtitle">${trackData.length_km} km · ${trackData.corners} corners · ${trackData.drs_zones} DRS zone(s) · ${trackData.direction}</p>
+    <p class="eyebrow">CIRCUIT · ${key.toUpperCase().replace("_", " ")}</p>
+    <h1 class="page-title">${trackData.name.split(" ")[0]} <span class="accent-soft">${trackData.name.split(" ").slice(1).join(" ")}</span></h1>
+    <p class="page-subtitle">${trackData.length_km} KM · ${trackData.corners} CORNERS · ${trackData.drs_zones} DRS ZONE(S) · ${trackData.direction.toUpperCase()}</p>
     <div class="toolbar">
       <label>Circuit
         <select id="circuit-select">${options}</select>
@@ -379,8 +424,9 @@ async function pagePredictor(year = config.currentSeason, round) {
     .join("");
 
   app.innerHTML = `
-    <h1 class="page-title">Predictor</h1>
-    <p class="page-subtitle">Pick a 2024 race — we'll predict it using only data from rounds before it, then compare to what actually happened.</p>
+    <p class="eyebrow">PRE-RACE REPORT · BACKTEST MODE · ${year}</p>
+    <h1 class="page-title">Race <span class="accent-soft">Predictor</span></h1>
+    <p class="page-subtitle">DRIVER-LEVEL 6-SIGNAL MODEL · CLICK ROW FOR FULL ANALYSIS</p>
     <div class="toolbar">
       <label>Target race
         <select id="predictor-round">${options}</select>
@@ -846,8 +892,9 @@ async function pageChampionship(year = config.currentSeason) {
   try {
     const data = await api.getChampionshipScenarios(year);
     app.innerHTML = `
-      <h1 class="page-title">${year} Title Probabilities</h1>
-      <p class="page-subtitle">${(data.simulations || 10000).toLocaleString()} Monte Carlo simulations</p>
+      <p class="eyebrow">CHAMPIONSHIP SIMULATOR · ${year}</p>
+      <h1 class="page-title">Title <span class="accent-soft">Probabilities</span></h1>
+      <p class="page-subtitle">${(data.simulations || 10000).toLocaleString()} MONTE CARLO RUNS · DRIVERS + CONSTRUCTORS</p>
       <div class="grid cols-2">
         <div class="card">
           <h2>Drivers' championship</h2>
