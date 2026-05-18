@@ -39,6 +39,97 @@ body {
   min-height: 100vh;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
+  position: relative;
+  overflow-x: hidden;
+}
+
+/* CRT-style scanline overlay — very subtle holographic feel */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background:
+    repeating-linear-gradient(
+      to bottom,
+      rgba(255, 255, 255, 0.012) 0px,
+      rgba(255, 255, 255, 0.012) 1px,
+      transparent 1px,
+      transparent 3px
+    );
+  pointer-events: none;
+  z-index: 999;
+  mix-blend-mode: overlay;
+}
+
+/* Faint moving radial highlight that drifts diagonally — adds the
+   sense of a holographic projection without being distracting. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(800px circle at 20% 30%, rgba(232, 0, 45, 0.04), transparent 60%);
+  pointer-events: none;
+  z-index: 0;
+  animation: hud-drift 28s ease-in-out infinite alternate;
+}
+
+@keyframes hud-drift {
+  0%   { background-position: 0% 0%; opacity: 1; }
+  50%  { background-position: 100% 50%; opacity: 0.6; }
+  100% { background-position: 50% 100%; opacity: 1; }
+}
+
+/* ---------- HUD intro animations ---------- */
+@keyframes hud-reveal {
+  0%   { opacity: 0; transform: translateY(12px) scale(0.985); filter: blur(8px); letter-spacing: 0.15em; }
+  60%  { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
+  100% { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); letter-spacing: inherit; }
+}
+
+@keyframes hud-typer {
+  0%   { width: 0; }
+  100% { width: 100%; }
+}
+
+@keyframes hud-pop-in {
+  0%   { opacity: 0; transform: translateY(20px) scale(0.97); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes hud-bracket-trace {
+  0%   { transform: scaleX(0); }
+  100% { transform: scaleX(1); }
+}
+
+.eyebrow {
+  display: inline-block;
+  overflow: hidden;
+  white-space: nowrap;
+  animation: hud-typer 0.7s cubic-bezier(0.65, 0.05, 0.36, 1) 0.05s both;
+}
+
+.page-title {
+  animation: hud-reveal 0.8s cubic-bezier(0.16, 1, 0.3, 1) 0.25s both;
+}
+
+.page-subtitle {
+  animation: hud-reveal 0.7s cubic-bezier(0.16, 1, 0.3, 1) 0.55s both;
+}
+
+.stat-tile,
+.card.race-card {
+  animation: hud-pop-in 0.55s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.stat-tiles .stat-tile:nth-child(1) { animation-delay: 0.55s; }
+.stat-tiles .stat-tile:nth-child(2) { animation-delay: 0.65s; }
+.stat-tiles .stat-tile:nth-child(3) { animation-delay: 0.75s; }
+.stat-tiles .stat-tile:nth-child(4) { animation-delay: 0.85s; }
+.stat-tiles .stat-tile:nth-child(5) { animation-delay: 0.95s; }
+
+.card.section-row {
+  animation: hud-pop-in 0.6s cubic-bezier(0.16, 1, 0.3, 1) 0.75s both;
 }
 
 a {
@@ -276,6 +367,34 @@ main {
   height: 200px;
   background: radial-gradient(circle at 100% 0%, rgba(232, 0, 45, 0.05), transparent 60%);
   pointer-events: none;
+}
+
+/* HUD corner brackets — Marvel/Iron Man-style L-marks on stat tiles + cards. */
+.stat-tile::after,
+.card::after {
+  content: "";
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 14px;
+  height: 14px;
+  border-top: 1px solid rgba(232, 0, 45, 0.55);
+  border-right: 1px solid rgba(232, 0, 45, 0.55);
+  pointer-events: none;
+  z-index: 2;
+}
+
+.stat-tile .corner-bl,
+.card .corner-bl {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  width: 14px;
+  height: 14px;
+  border-bottom: 1px solid rgba(232, 0, 45, 0.55);
+  border-left: 1px solid rgba(232, 0, 45, 0.55);
+  pointer-events: none;
+  z-index: 2;
 }
 
 .stat-tile .label {
@@ -1099,6 +1218,55 @@ main {
 
 .track-3d-container canvas:active {
   cursor: grabbing;
+}
+
+/* ---------- modal HUD "scanning" intro ---------- */
+.scan-intro {
+  position: absolute;
+  inset: 0;
+  background: rgba(8, 8, 13, 0.92);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  z-index: 5;
+  font-family: var(--mono);
+  letter-spacing: 0.18em;
+  pointer-events: none;
+  border-radius: inherit;
+}
+
+.scan-intro .scan-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  box-shadow: 0 0 12px var(--accent);
+  animation: scan-sweep 1.2s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite;
+}
+
+.scan-intro .scan-text {
+  font-size: 12px;
+  color: var(--accent);
+  text-transform: uppercase;
+}
+
+.scan-intro .scan-progress {
+  margin-top: 12px;
+  font-size: 14px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes scan-sweep {
+  0%   { top: 12%; }
+  100% { top: 88%; }
+}
+
+/* count-up affordance: hide raw number until JS reveals it */
+.stat-tile .value.counting {
+  color: var(--accent);
 }
 
 .analysis-prose p {

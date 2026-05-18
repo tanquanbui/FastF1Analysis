@@ -128,6 +128,57 @@ function flagFor(code) {
     .join("");
 }
 
+/**
+ * Add Marvel-style corner brackets to every .card and .stat-tile that's
+ * been rendered. The top-right corner is handled by ::after in CSS; we
+ * append a bottom-left .corner-bl span here so we don't have to repeat
+ * the HUD chrome in every render call.
+ */
+function applyHudChrome() {
+  document.querySelectorAll(".card, .stat-tile").forEach((el) => {
+    if (!el.querySelector(":scope > .corner-bl")) {
+      const c = document.createElement("span");
+      c.className = "corner-bl";
+      el.appendChild(c);
+    }
+  });
+}
+
+/**
+ * Count a numeric value up from 0 to its final value over `duration` ms.
+ * Operates on the .value child of every .stat-tile that has a data-target
+ * attribute set.
+ */
+function startCountUps(duration = 900) {
+  const elements = document.querySelectorAll(".stat-tile .value[data-target]");
+  elements.forEach((el) => {
+    const target = Number(el.dataset.target);
+    if (!Number.isFinite(target)) return;
+    const unit = el.dataset.unit || "";
+    const suffixHtml = el.dataset.suffix || "";
+    const prefix = el.dataset.prefix || "";
+    const decimals = Number(el.dataset.decimals || 0);
+    const startTime = performance.now();
+    el.classList.add("counting");
+    function frame(now) {
+      const t = Math.min(1, (now - startTime) / duration);
+      const eased = 1 - Math.pow(1 - t, 3);
+      const current = target * eased;
+      el.firstChild && el.removeChild(el.firstChild);
+      const text = `${prefix}${current.toFixed(decimals)}${unit}`;
+      el.insertBefore(document.createTextNode(text), el.firstChild);
+      if (t < 1) requestAnimationFrame(frame);
+      else {
+        el.classList.remove("counting");
+        el.firstChild && el.removeChild(el.firstChild);
+        el.insertBefore(document.createTextNode(`${prefix}${target.toFixed(decimals)}${unit}`), el.firstChild);
+        if (suffixHtml) el.insertAdjacentHTML("beforeend", suffixHtml);
+      }
+    }
+    requestAnimationFrame(frame);
+  });
+}
+
 function fullTeamName(code, fallback) {
   return config.teamNames[code] || fallback || code || "Unknown";
 }
@@ -189,11 +240,11 @@ async function pageRace(year, round) {
         </div>
         <div class="stat-tile">
           <span class="label">Margin</span>
-          <span class="value">${marginMs != null ? `+${(marginMs/1000).toFixed(3)}` : "—"}<span class="unit">s</span></span>
+          <span class="value" data-target="${marginMs != null ? (marginMs/1000).toFixed(3) : 0}" data-prefix="+" data-unit="" data-decimals="3" data-suffix='<span class="unit">s</span>'>+0.000<span class="unit">s</span></span>
         </div>
         <div class="stat-tile">
           <span class="label">Pit Stops</span>
-          <span class="value">${pitCount || "—"}</span>
+          <span class="value" data-target="${pitCount || 0}" data-decimals="0">0</span>
         </div>
       </div>
 
@@ -665,14 +716,34 @@ function showDriverAnalysis(d, year, round) {
   wrap.innerHTML = html;
   document.body.appendChild(wrap);
 
-  // Spin up the 3D scene after the modal is in the DOM.
-  const teardown = render3DTrack({
-    containerId: "driver-3d",
-    circuitKey,
-    driverColor: color,
-    driverCode: code,
-    signals: { ...signals, combined: d.Combined },
-  });
+  // Inject a brief HUD scanning intro before the 3D scene boots.
+  const driver3dEl = document.getElementById("driver-3d");
+  driver3dEl.style.position = "relative";
+  driver3dEl.innerHTML = `
+    <div class="scan-intro">
+      <div class="scan-line"></div>
+      <span class="scan-text">ANALYSING DRIVER · ${code}</span>
+      <span class="scan-progress" id="scan-pct">0%</span>
+    </div>`;
+  const scanPct = document.getElementById("scan-pct");
+  const scanStart = performance.now();
+  const SCAN_MS = 1300;
+  (function scanFrame() {
+    const t = Math.min(1, (performance.now() - scanStart) / SCAN_MS);
+    if (scanPct) scanPct.textContent = `${Math.round(t * 100)}%`;
+    if (t < 1) requestAnimationFrame(scanFrame);
+  })();
+
+  let teardown = null;
+  setTimeout(() => {
+    teardown = render3DTrack({
+      containerId: "driver-3d",
+      circuitKey,
+      driverColor: color,
+      driverCode: code,
+      signals: { ...signals, combined: d.Combined },
+    });
+  }, SCAN_MS);
 
   const close = () => {
     teardown?.();
@@ -924,29 +995,45 @@ function navigate(path) {
   window.location.hash = path;
 }
 
+function afterRender() {
+  // Called after every page renders. Adds HUD chrome to new cards/tiles
+  // and triggers the count-up animation on any [data-target] values.
+  requestAnimationFrame(() => {
+    applyHudChrome();
+    startCountUps();
+  });
+}
+
 function dispatch() {
   const hash = window.location.hash.replace(/^#/, "") || "/season";
   const parts = hash.split("/").filter(Boolean);
   const [page, ...args] = parts;
+  let p;
   switch (page) {
     case "season":
-      return pageSeason(args[0] || config.currentSeason);
+      p = pageSeason(args[0] || config.currentSeason); break;
     case "race":
-      return pageRace(args[0] || config.currentSeason, args[1] || 1);
+      p = pageRace(args[0] || config.currentSeason, args[1] || 1); break;
     case "standings":
-      return pageStandings(args[0] || config.currentSeason, args[1] || 1);
+      p = pageStandings(args[0] || config.currentSeason, args[1] || 1); break;
     case "team":
-      return pageTeam(args[0]);
+      p = pageTeam(args[0]); break;
     case "circuit":
-      return pageCircuit(args[0]);
+      p = pageCircuit(args[0]); break;
     case "predictions":
-      return pagePredictions(args[0], args[1]);
+      p = pagePredictions(args[0], args[1]); break;
     case "predictor":
-      return pagePredictor(args[0], args[1]);
+      p = pagePredictor(args[0], args[1]); break;
     case "championship":
-      return pageChampionship(args[0]);
+      p = pageChampionship(args[0]); break;
     default:
-      return pageSeason();
+      p = pageSeason();
+  }
+  // After the page promise resolves, slap on the HUD chrome.
+  if (p && typeof p.then === "function") {
+    p.then(afterRender);
+  } else {
+    afterRender();
   }
 }
 

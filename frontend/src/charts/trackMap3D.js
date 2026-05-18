@@ -70,7 +70,11 @@ export function render3DTrack({
   scene.environment = pmrem.fromScene(envScene, 0.02).texture;
 
   const camera = new THREE.PerspectiveCamera(40, width / height, 0.5, 6000);
-  camera.position.set(-380, 400, 520);
+  // Cinematic intro: start far away looking down at the scene, then
+  // tween into a settled orbit. See the intro-tween block inside tick().
+  const introStartPos = new THREE.Vector3(-1800, 1500, 1800);
+  const introEndPos = new THREE.Vector3(-380, 400, 520);
+  camera.position.copy(introStartPos);
 
   const composer = new EffectComposer(renderer);
   composer.addPass(new RenderPass(scene, camera));
@@ -84,10 +88,11 @@ export function render3DTrack({
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
   controls.dampingFactor = 0.07;
-  controls.autoRotate = true;
+  controls.autoRotate = false; // turn on after the intro
   controls.autoRotateSpeed = 0.4;
   controls.minPolarAngle = Math.PI / 8;
   controls.maxPolarAngle = Math.PI / 2.05;
+  controls.enabled = false;    // disable interaction during intro
 
   // ---------- sky dome ----------
   scene.add(new THREE.Mesh(
@@ -457,10 +462,38 @@ export function render3DTrack({
   let raf;
   const sectorAffinity = sectorVelocityFactor.bind(null, signals);
 
+  // --- Cinematic intro tween state ---
+  const INTRO_MS = 2400;
+  const introStartedAt = performance.now();
+  let introComplete = false;
+  function easeInOutCubic(x) {
+    return x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+  }
+
   // Spin wheels and DRS hint.
   const wheelMeshes = car.userData.wheels || [];
   function tick() {
     raf = requestAnimationFrame(tick);
+
+    // Camera intro tween — runs once, then hands control to OrbitControls.
+    if (!introComplete) {
+      const elapsed = performance.now() - introStartedAt;
+      const u = Math.min(1, elapsed / INTRO_MS);
+      const eased = easeInOutCubic(u);
+      camera.position.lerpVectors(introStartPos, introEndPos, eased);
+      camera.lookAt(0, 0, 0);
+      // Ease the bloom and the exposure in too so the scene "boots up".
+      bloom.strength = 0.5 * eased;
+      renderer.toneMappingExposure = 0.6 + eased * 0.5;
+      if (u >= 1) {
+        introComplete = true;
+        controls.enabled = true;
+        controls.autoRotate = true;
+        bloom.strength = 0.5;
+        renderer.toneMappingExposure = 1.1;
+      }
+    }
+
     const sector = sectorAt(t, track.sectors);
     const vel = 0.0006 + 0.0012 * sectorAffinity(sector);
     t = (t + vel) % 1;
