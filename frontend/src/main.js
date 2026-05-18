@@ -669,7 +669,7 @@ function showDriverAnalysis(d, year, round) {
     })
     .join("");
 
-  const narrative = buildNarrative(d, signals, weights, inputs, track, circuitKey);
+  const narrative = buildNarrative(d, signals, weights, inputs, track, circuitKey, round);
 
   const html = `
     <div class="modal-backdrop">
@@ -766,12 +766,12 @@ function showDriverAnalysis(d, year, round) {
  * driver's signals to a specific circuit characteristic so the user can
  * see WHY each input matters here.
  */
-function buildNarrative(d, signals, weights, inputs, track, circuitKey) {
+function buildNarrative(d, signals, weights, inputs, track, circuitKey, round) {
   const name = (d.DriverName || d.DriverCode || "this driver").split(" ").pop();
   const sections = [];
 
   // Track context — what does this circuit reward?
-  const features = trackHighlights(circuitKey);
+  const features = trackHighlights(circuitKey, round);
   if (features) {
     sections.push(`<p><strong>${track.name}</strong> is a ${features.character} circuit. ${features.story}</p>`);
   }
@@ -858,21 +858,37 @@ function signalParagraph(key, score, weight, contrib, inputs, name, features) {
   }
 }
 
-function trackHighlights(circuitKey) {
-  const k = circuitKey.toLowerCase();
-  const map = {
-    monaco: { character: "tight, low-speed street", story: "Overtaking is essentially impossible — pole position wins ~70% of races held here. Qualifying score dominates everything else.", dominantSignal: "qualifying" },
-    monza: { character: "high-speed power", story: "Long straights and minimal corners. DRS trains form easily; straight-line speed and slipstream tactics decide it.", dominantSignal: "track_fit" },
-    silverstone: { character: "high-speed aero", story: "Maggotts-Becketts demand a confidence-inspiring high-speed platform; Stowe rewards composed braking.", dominantSignal: "historical" },
-    spa: { character: "all-rounder, weather-dependent", story: "Eau Rouge–Raidillon flat-out separates the brave. Rain is the wildcard 30% of years.", dominantSignal: "historical" },
-    suzuka: { character: "technical figure-8", story: "S-Curves and 130R reward absolute precision. Engineers' favourite circuit.", dominantSignal: "qualifying" },
-    bahrain: { character: "tyre-management", story: "Three DRS zones make overtaking realistic, but the rear tyres are the limiting factor.", dominantSignal: "track_fit" },
-    abu_dhabi: { character: "modern, season-finale", story: "Reconfigured 2021 layout improved overtaking. Pressure of the finale adds strategic complexity.", dominantSignal: "recent_form" },
-    miami: { character: "permanent street", story: "Mixed slow + fast sections. DRS into T17 is the prime overtake.", dominantSignal: "qualifying" },
-    singapore: { character: "night street", story: "High humidity, 22 corners, safety-car probability ~60%. The most physically demanding race.", dominantSignal: "qualifying" },
-    hungary: { character: "low-speed European Monaco", story: "Twisty, narrow, low-speed cornering rules. Track-position critical.", dominantSignal: "qualifying" },
-  };
-  return map[k] || null;
+// Keyed by 2024 round number — every race gets its own character +
+// narrative so the analysis doesn't fall back to "Monza" for everyone.
+const TRACK_HIGHLIGHTS_BY_ROUND = {
+  1:  { character: "tyre-management",                story: "Three DRS zones make overtaking realistic, but rear tyres are the limiting factor.", dominantSignal: "track_fit" },
+  2:  { character: "ultra-fast street",              story: "Highest average speed of any street circuit. Walls + flat-out commitment in the high-speed sweeps.", dominantSignal: "qualifying" },
+  3:  { character: "park-circuit semi-permanent",    story: "Wide and flowing with several heavy braking zones. Safety-car probability around 35%.", dominantSignal: "historical" },
+  4:  { character: "technical figure-8",             story: "S-Curves and 130R reward absolute precision. Engineers' favourite circuit.", dominantSignal: "qualifying" },
+  5:  { character: "long-straight + slow corners",   story: "1.2km back straight rewards top speed; the rest of the lap punishes anything with weak slow corner traction.", dominantSignal: "track_fit" },
+  6:  { character: "permanent street",               story: "Mixed slow + fast sections. DRS into T17 is the prime overtake.", dominantSignal: "qualifying" },
+  7:  { character: "narrow old-school",              story: "Overtaking nearly impossible — qualifying decides the race.", dominantSignal: "qualifying" },
+  8:  { character: "tight low-speed street",         story: "Overtaking is essentially impossible — pole wins ~70% of races held here. Qualifying score dominates.", dominantSignal: "qualifying" },
+  9:  { character: "stop-go semi-street",            story: "Wall of Champions claims pole-sitters. High kerb-riding tolerance + braking stability rewarded.", dominantSignal: "overtaking" },
+  10: { character: "aerodynamic benchmark",          story: "Reveals true car balance. High-speed corners early, slow chicane late — exposes any aero weakness.", dominantSignal: "track_fit" },
+  11: { character: "short power-and-flow",           story: "Only 9 corners but extreme elevation. Brake stability in T3 critical.", dominantSignal: "recent_form" },
+  12: { character: "high-speed aero",                story: "Maggotts-Becketts demand a confidence-inspiring high-speed platform; Stowe rewards composed braking.", dominantSignal: "historical" },
+  13: { character: "low-speed European Monaco",      story: "Twisty, narrow, low-speed cornering rules. Track-position is everything.", dominantSignal: "qualifying" },
+  14: { character: "all-rounder, weather wildcard",  story: "Eau Rouge–Raidillon flat-out separates the brave. Rain hits ~30% of years.", dominantSignal: "historical" },
+  15: { character: "banked old-school",              story: "Banking at T3 + T14 keeps following cars closer. Qualifying still matters because the track is narrow.", dominantSignal: "qualifying" },
+  16: { character: "high-speed power",               story: "Long straights and minimal corners. DRS trains form easily; straight-line speed and slipstream tactics decide it.", dominantSignal: "track_fit" },
+  17: { character: "fast street",                    story: "Long castle straight + slow technical second sector. Tyre warm-up after slow corners is the gotcha.", dominantSignal: "overtaking" },
+  18: { character: "physical night street",          story: "High humidity, 19 corners, safety-car probability ~60%. The most physically demanding race.", dominantSignal: "qualifying" },
+  19: { character: "bumpy COTA",                     story: "Hilly and bumpy. Tests suspension travel + high-speed change of direction in S1.", dominantSignal: "track_fit" },
+  20: { character: "high-altitude",                  story: "Thin air robs aero downforce + engine power equally. Cars with good cooling lap consistency win.", dominantSignal: "historical" },
+  21: { character: "Brazilian wildcard",             story: "Weather frequently flips the result. Sprint format adds extra strategic complexity.", dominantSignal: "recent_form" },
+  22: { character: "Strip night race",               story: "Long straights and a cold low-grip surface. Front-end stability in heavy braking decides it.", dominantSignal: "qualifying" },
+  23: { character: "high-speed sweeper",             story: "Lusail's high-speed corners + brutal heat = a tyre-stress contest.", dominantSignal: "track_fit" },
+  24: { character: "modern, season-finale",          story: "Reconfigured 2021 layout improved overtaking. Pressure of the finale adds strategic complexity.", dominantSignal: "recent_form" },
+};
+
+function trackHighlights(circuitKey, round) {
+  return TRACK_HIGHLIGHTS_BY_ROUND[Number(round)] || null;
 }
 
 function prettyKey(k) {
