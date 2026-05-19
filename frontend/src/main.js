@@ -634,7 +634,12 @@ function showDriverAnalysis(d, year, round) {
   const flag = flagFor(config.driverCountry[code]);
   const signals = d.Signals || {};
   const weights = d.Weights || {};
-  const inputs = d.InputData || {};
+  // The predictor stores qualifying_position at the top level of the driver
+  // record, not inside InputData — merge it so the narrative can read it.
+  const inputs = {
+    ...(d.InputData || {}),
+    qualifying_position: d.QualifyingPosition ?? null,
+  };
   const circuitKey = CIRCUIT_BY_ROUND[Number(round)] || "monza";
   const track = TRACKS[circuitKey] || TRACKS.monza;
 

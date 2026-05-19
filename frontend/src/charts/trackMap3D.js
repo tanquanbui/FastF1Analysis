@@ -121,36 +121,67 @@ export function render3DTrack({
   }
   const curve = new THREE.CatmullRomCurve3(points, true, "catmullrom", 0.5);
 
-  // ---------- TRACK OUTLINE: bright glowing tube ----------
-  const tubeGeom = new THREE.TubeGeometry(curve, 800, 1.8, 12, true);
+  // ---------- TRACK OUTLINE ----------
+  // Track painted bright silver (not the driver's livery). Some teams have
+  // very dark colours (RBR navy, Haas gunmetal) that disappear against the
+  // dark scene + bloom threshold. A neutral light tube reads clearly for
+  // every team. Only the dot + trail are tinted by the driver's livery.
+  const tubeGeom = new THREE.TubeGeometry(curve, 800, 2.2, 12, true);
   const tubeMat = new THREE.MeshStandardMaterial({
-    color: new THREE.Color(driverColor),
-    emissive: new THREE.Color(driverColor),
-    emissiveIntensity: 1.6,
-    metalness: 0.5,
-    roughness: 0.35,
+    color: 0xf4f4f8,
+    emissive: 0xf4f4f8,
+    emissiveIntensity: 1.4,
+    metalness: 0.6,
+    roughness: 0.25,
     toneMapped: false,
   });
   scene.add(new THREE.Mesh(tubeGeom, tubeMat));
 
-  // Subtle underline beneath the tube for a sense of physical track.
-  const baseTube = new THREE.TubeGeometry(curve, 600, 4, 10, true);
+  // Subtle dark base underneath for depth.
+  const baseTube = new THREE.TubeGeometry(curve, 600, 5, 10, true);
   const baseMat = new THREE.MeshStandardMaterial({
-    color: 0x101018, metalness: 0.4, roughness: 0.5,
+    color: 0x14141c, metalness: 0.3, roughness: 0.6,
   });
   scene.add(new THREE.Mesh(baseTube, baseMat));
 
+  // Accent line in the driver's livery — thin, sits on top of the silver
+  // tube, gives a team-coloured stripe so the team identity still reads.
+  const accentTube = new THREE.TubeGeometry(curve, 800, 0.7, 8, true);
+  scene.add(new THREE.Mesh(accentTube, new THREE.MeshBasicMaterial({
+    color: new THREE.Color(driverColor),
+    toneMapped: false,
+  })));
+
   // ---------- DRIVER DOT ----------
+  // Brighten the livery colour so dark teams (RBR navy, Haas gunmetal)
+  // still show clearly above the silver track. We additively blend the
+  // raw livery with white, then mark toneMapped:false so bloom hits hard.
+  const baseLivery = new THREE.Color(driverColor);
+  const brightLivery = baseLivery.clone().multiplyScalar(2.2).clampScalar(0, 1);
   const dot = new THREE.Mesh(
-    new THREE.SphereGeometry(2.4, 24, 24),
+    new THREE.SphereGeometry(3.2, 24, 24),
     new THREE.MeshStandardMaterial({
-      color: new THREE.Color(driverColor),
-      emissive: new THREE.Color(driverColor),
-      emissiveIntensity: 2.0,
+      color: brightLivery,
+      emissive: brightLivery,
+      emissiveIntensity: 2.4,
       toneMapped: false,
     }),
   );
   scene.add(dot);
+
+  // A faint outer halo around the dot, fixed to its size, for extra pop.
+  const halo = new THREE.Mesh(
+    new THREE.SphereGeometry(4.6, 16, 16),
+    new THREE.MeshBasicMaterial({
+      color: brightLivery,
+      transparent: true,
+      opacity: 0.25,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      toneMapped: false,
+    }),
+  );
+  dot.add(halo);
 
   // particle trail behind the dot
   const trailLen = 80;
