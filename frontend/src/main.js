@@ -146,8 +146,8 @@ function applyHudChrome() {
 
 /**
  * Count a numeric value up from 0 to its final value over `duration` ms.
- * Operates on the .value child of every .stat-tile that has a data-target
- * attribute set.
+ * Mutates a single dedicated text node instead of destroying/recreating
+ * children every frame — much smoother in DevTools timeline.
  */
 function startCountUps(duration = 900) {
   const elements = document.querySelectorAll(".stat-tile .value[data-target]");
@@ -158,21 +158,30 @@ function startCountUps(duration = 900) {
     const suffixHtml = el.dataset.suffix || "";
     const prefix = el.dataset.prefix || "";
     const decimals = Number(el.dataset.decimals || 0);
-    const startTime = performance.now();
+    // Wipe the cell and create exactly one text node we mutate per frame
+    // (plus optional suffix element appended once).
+    el.textContent = "";
+    const textNode = document.createTextNode("");
+    el.appendChild(textNode);
+    let suffixEl = null;
+    if (suffixHtml) {
+      const tpl = document.createElement("template");
+      tpl.innerHTML = suffixHtml;
+      suffixEl = tpl.content.firstElementChild;
+      el.appendChild(suffixEl);
+    }
     el.classList.add("counting");
+    const startTime = performance.now();
     function frame(now) {
       const t = Math.min(1, (now - startTime) / duration);
       const eased = 1 - Math.pow(1 - t, 3);
       const current = target * eased;
-      el.firstChild && el.removeChild(el.firstChild);
-      const text = `${prefix}${current.toFixed(decimals)}${unit}`;
-      el.insertBefore(document.createTextNode(text), el.firstChild);
-      if (t < 1) requestAnimationFrame(frame);
-      else {
+      textNode.nodeValue = `${prefix}${current.toFixed(decimals)}${unit}`;
+      if (t < 1) {
+        requestAnimationFrame(frame);
+      } else {
+        textNode.nodeValue = `${prefix}${target.toFixed(decimals)}${unit}`;
         el.classList.remove("counting");
-        el.firstChild && el.removeChild(el.firstChild);
-        el.insertBefore(document.createTextNode(`${prefix}${target.toFixed(decimals)}${unit}`), el.firstChild);
-        if (suffixHtml) el.insertAdjacentHTML("beforeend", suffixHtml);
       }
     }
     requestAnimationFrame(frame);
@@ -1022,6 +1031,16 @@ function afterRender() {
   requestAnimationFrame(() => {
     applyHudChrome();
     startCountUps();
+    // Strip will-change once the entrance animations finish so we don't
+    // keep promoting every card to its own GPU layer forever — that
+    // drains battery and slows down later interactions (scroll, hover).
+    setTimeout(() => {
+      document
+        .querySelectorAll(".eyebrow, .page-title, .page-subtitle, .stat-tile, .card.race-card, .card.section-row")
+        .forEach((el) => {
+          el.style.willChange = "auto";
+        });
+    }, 1500);
   });
 }
 
