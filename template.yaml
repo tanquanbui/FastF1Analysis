@@ -28,11 +28,28 @@ Parameters:
     Type: Number
     Default: 30
     AllowedValues: [7, 14, 30, 60, 90, 180, 365]
+  DashboardCustomDomainName:
+    Type: String
+    Default: ""
+    Description: Optional CloudFront alternate domain name for the dashboard, e.g. f1.quanbui.dev.
+  DashboardCertificateArn:
+    Type: String
+    Default: ""
+    Description: Optional ACM certificate ARN for DashboardCustomDomainName. Must be in us-east-1 for CloudFront.
 
 Conditions:
-  IsProd: !Equals [!Ref Environment, "prod"]
-  Phase2Enabled: !Equals [!Ref EnablePhase2, "true"]
-  DataPipelineEnabled: !Equals [!Ref EnableDataPipeline, "true"]
+  IsProd:
+    Fn::Equals: [!Ref Environment, "prod"]
+  Phase2Enabled:
+    Fn::Equals: [!Ref EnablePhase2, "true"]
+  DataPipelineEnabled:
+    Fn::Equals: [!Ref EnableDataPipeline, "true"]
+  HasDashboardCustomDomain:
+    Fn::And:
+      - Fn::Not:
+          - Fn::Equals: [!Ref DashboardCustomDomainName, ""]
+      - Fn::Not:
+          - Fn::Equals: [!Ref DashboardCertificateArn, ""]
 
 Globals:
   Function:
@@ -580,6 +597,10 @@ Resources:
         PriceClass: PriceClass_100
         HttpVersion: http2and3
         IPV6Enabled: true
+        Aliases: !If
+          - HasDashboardCustomDomain
+          - [!Ref DashboardCustomDomainName]
+          - !Ref AWS::NoValue
         Origins:
           - Id: S3Dashboard
             DomainName: !GetAtt DashboardBucket.RegionalDomainName
@@ -600,8 +621,12 @@ Resources:
           - ErrorCode: 404
             ResponseCode: 200
             ResponsePagePath: /index.html
-        ViewerCertificate:
-          CloudFrontDefaultCertificate: true
+        ViewerCertificate: !If
+          - HasDashboardCustomDomain
+          - AcmCertificateArn: !Ref DashboardCertificateArn
+            SslSupportMethod: sni-only
+            MinimumProtocolVersion: TLSv1.2_2021
+          - CloudFrontDefaultCertificate: true
 
 Outputs:
   ApiEndpoint:
@@ -611,10 +636,19 @@ Outputs:
       Name: !Sub "${AWS::StackName}-ApiEndpoint"
 
   DashboardUrl:
+    Description: Dashboard URL. Uses the custom domain when DashboardCustomDomainName and DashboardCertificateArn are provided.
+    Value: !If
+      - HasDashboardCustomDomain
+      - !Sub "https://${DashboardCustomDomainName}"
+      - !Sub "https://${DashboardDistribution.DomainName}"
+    Export:
+      Name: !Sub "${AWS::StackName}-DashboardUrl"
+
+  DashboardCloudFrontUrl:
     Description: CloudFront distribution URL.
     Value: !Sub "https://${DashboardDistribution.DomainName}"
     Export:
-      Name: !Sub "${AWS::StackName}-DashboardUrl"
+      Name: !Sub "${AWS::StackName}-DashboardCloudFrontUrl"
 
   DashboardBucketName:
     Description: S3 bucket hosting the dashboard (deploy artifacts here).

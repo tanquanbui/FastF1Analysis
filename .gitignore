@@ -31,6 +31,12 @@ fastf1_cache/
 .env
 .env.*
 !.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+config/local.*
 
 # Node / frontend
 node_modules/

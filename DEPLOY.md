@@ -251,7 +251,69 @@ aws lambda invoke \
 
 ---
 
-## 9. Wire up GitHub Actions (one-time, optional)
+## 9. Optional custom dashboard domain: `f1.quanbui.dev`
+
+CloudFront custom domains need two pieces:
+
+1. An ACM certificate in **`us-east-1`** for `f1.quanbui.dev`.
+2. A Cloudflare DNS `CNAME` from `f1` to the CloudFront distribution domain.
+
+Request and validate the certificate:
+
+```bash
+CERT_ARN=$(aws acm request-certificate \
+  --region us-east-1 \
+  --domain-name f1.quanbui.dev \
+  --validation-method DNS \
+  --query CertificateArn \
+  --output text)
+
+aws acm describe-certificate \
+  --region us-east-1 \
+  --certificate-arn "$CERT_ARN" \
+  --query "Certificate.DomainValidationOptions[0].ResourceRecord"
+```
+
+Add the returned validation `CNAME` in Cloudflare DNS, wait for ACM to show `ISSUED`, then deploy the stack with the custom-domain parameters:
+
+```bash
+sam deploy --no-confirm-changeset \
+  --parameter-overrides \
+    Environment=dev \
+    EnableDataPipeline=true \
+    EnablePhase2=true \
+    DashboardCustomDomainName=f1.quanbui.dev \
+    DashboardCertificateArn="$CERT_ARN"
+```
+
+After CloudFormation finishes, find the CloudFront hostname:
+
+```bash
+aws cloudformation describe-stacks --stack-name pitstop-analytics \
+  --query "Stacks[0].Outputs[?OutputKey=='DashboardCloudFrontUrl'].OutputValue" \
+  --output text
+```
+
+In Cloudflare, add:
+
+```text
+Type: CNAME
+Name: f1
+Target: <your distribution>.cloudfront.net
+Proxy status: DNS only
+TTL: Auto
+```
+
+For GitHub Actions deploys, set these repo values:
+
+```text
+Actions variable: DASHBOARD_CUSTOM_DOMAIN = f1.quanbui.dev
+Actions secret:   DASHBOARD_CERTIFICATE_ARN = arn:aws:acm:us-east-1:...
+```
+
+---
+
+## 10. Wire up GitHub Actions (one-time, optional)
 
 The two workflows in `.github/workflows/` expect:
 

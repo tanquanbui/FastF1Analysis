@@ -24,6 +24,8 @@ permissions:
 env:
   AWS_DEFAULT_REGION: ap-southeast-2
   AWS_REGION: ap-southeast-2
+  DASHBOARD_CUSTOM_DOMAIN: ${{ vars.DASHBOARD_CUSTOM_DOMAIN }}
+  DASHBOARD_CERTIFICATE_ARN: ${{ secrets.DASHBOARD_CERTIFICATE_ARN }}
 
 jobs:
   test:
@@ -105,4 +107,6 @@ jobs:
             --parameter-overrides \
               Environment="$ENV_INPUT" \
               EnableDataPipeline=true \
-              EnablePhase2=true
+              EnablePhase2=true \
+              DashboardCustomDomainName="$DASHBOARD_CUSTOM_DOMAIN" \
+              DashboardCertificateArn="$DASHBOARD_CERTIFICATE_ARN"
