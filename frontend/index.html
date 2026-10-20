@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>PitStop Analytics</title>
+  <title>PitStop Simulator</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link
@@ -18,29 +18,11 @@
       <span class="brand-logo"></span>
       <div class="brand-text">
         <span class="brand-line-1">PITSTOP</span>
-        <span class="brand-line-2">ANALYTICS</span>
+        <span class="brand-line-2">AI RACE SIMULATOR</span>
       </div>
     </div>
-    <nav class="primary-nav">
-      <a href="#/season" data-route="season">SEASON</a>
-      <a href="#/race" data-route="race">RACE</a>
-      <a href="#/standings" data-route="standings">STANDINGS</a>
-      <a href="#/team" data-route="team">TEAM INTEL</a>
-      <a href="#/circuit" data-route="circuit">CIRCUIT</a>
-      <a href="#/predictor" data-route="predictor">PREDICTOR</a>
-      <a href="#/championship" data-route="championship">TITLE SIM</a>
-    </nav>
+    <span id="mode-badge" class="mode-badge">…</span>
   </header>
-
-  <aside class="f1-lights" aria-hidden="true">
-    <span class="f1-light"></span>
-    <span class="f1-light"></span>
-    <span class="f1-light"></span>
-    <span class="f1-light"></span>
-    <span class="f1-light"></span>
-    <span class="f1-light"></span>
-    <span class="f1-light"></span>
-  </aside>
 
   <main id="app">
     <section class="loader">
@@ -50,18 +32,10 @@
   </main>
 
   <footer class="site-footer">
-    <p>Data: FastF1 · Ergast (jolpi.ca mirror) · Last updated <span id="last-updated">—</span></p>
+    <p>Simulations by Claude · Data: FastF1 · race context from qualifying, practice long runs and circuit characteristics</p>
   </footer>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.5/dist/chart.umd.min.js"></script>
-  <script type="importmap">
-    {
-      "imports": {
-        "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.min.js",
-        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
-      }
-    }
-  </script>
   <script type="module" src="./src/main.js"></script>
 </body>
 </html>

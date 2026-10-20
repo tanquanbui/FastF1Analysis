@@ -1,0 +1,4 @@
+anthropic>=1.15.0
+pydantic>=2.7
+# Optional: live race data (qualifying, practice long runs, weather)
+fastf1>=3.4

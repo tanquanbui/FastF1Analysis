@@ -1,8 +1,11 @@
-.PHONY: help install test test-ingestion test-processor test-api test-fingerprint test-trainer test-predictor test-all lint format build deploy deploy-prod sync invoke-ingestion invoke-processor seed-historical clean preflight validate compile-check tree
+.PHONY: help install sim sim-demo test-simulator test test-ingestion test-processor test-api test-fingerprint test-trainer test-predictor test-all lint format build deploy deploy-prod sync invoke-ingestion invoke-processor seed-historical clean preflight validate compile-check tree
 
 help:
 	@echo "PitStop Analytics — make targets"
 	@echo ""
+	@echo "  sim                AI race simulator + dashboard on http://localhost:8080"
+	@echo "  sim-demo           Same, offline demo mode (no API key)"
+	@echo "  test-simulator     Run simulator tests"
 	@echo "  preflight          Run all pre-deploy checks (compile + test + sam validate)"
 	@echo "  install            Install dev dependencies for all functions"
 	@echo "  compile-check      Syntax-check every Python file"
@@ -34,6 +37,7 @@ install:
 	pip install -r functions/fingerprint/requirements.txt
 	pip install -r functions/trainer/requirements.txt
 	pip install -r functions/predictor/requirements.txt
+	pip install -r simulator/requirements.txt
 	pip install pytest pytest-cov moto ruff black
 
 test: test-ingestion test-processor test-api
@@ -54,10 +58,19 @@ test-fingerprint:
 test-trainer:
 	cd functions/trainer && python -m pytest
 
+sim:
+	python -m simulator.server
+
+sim-demo:
+	python -m simulator.server --demo
+
+test-simulator:
+	cd simulator && python -m pytest
+
 test-predictor:
 	cd functions/predictor && python -m pytest
 
-test-all: test test-fingerprint test-trainer test-predictor
+test-all: test test-fingerprint test-trainer test-predictor test-simulator
 	@echo "All tests passed (Phase 1 + Phase 2)."
 
 lint:
