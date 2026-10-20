@@ -1,10 +1,99 @@
-# PitStop Analytics
+# PitStop — AI Race Simulator
 
-A serverless F1 race-intelligence platform combining real telemetry, historical race data, and a heuristic driver-level prediction model. Built on AWS — Lambda (zip + container images), DynamoDB, S3, CloudFront, API Gateway — with a vanilla-JS dashboard.
+Pick a Grand Prix, describe a scenario ("rain from lap 30", "pole sitter starts from the pit lane"), and **Claude simulates the race lap by lap**: race pace, tyre degradation, pit-wall strategy calls, safety cars, overtakes, retirements and the final classification. Then ask follow-up **what-ifs** ("what if NOR had pitted under the safety car?") and compare the versions side by side.
 
-> **Live dev environment:** [https://d13188yck2eq19.cloudfront.net](https://d13188yck2eq19.cloudfront.net)
+The dashboard is now simulator-first. The serverless data pipeline described further down (FastF1 + Ergast → S3 → DynamoDB) is still here and feeds the simulator's race context.
+
+## Quick start
+
+```bash
+pip install -r simulator/requirements.txt
+export ANTHROPIC_API_KEY=sk-ant-...        # without it the app runs in offline demo mode
+python -m simulator prefetch 2024          # optional: load + cache every 2024 weekend from FastF1 ahead of time
+python -m simulator.server                 # or: make sim
+open http://localhost:8080
+```
+
+In the app:
+
+- **New simulation**: pick a season (2018 onwards) and Grand Prix, then load the race data. The explorer shows everything Claude will get: grid, every session of the weekend, season form, history at the circuit, and the exact prompt. Add a scenario and simulate. Claude's reasoning streams live while it works.
+- **Result page** (`#/r/<id>`): podium, classification, lap chart, tyre strategies with pit-call reasons, key moments, strategy brief and race report, scored against the real race for past events. Ask what-ifs; each one becomes a new version tab. Export a Markdown report or the full JSON.
+- **History**: every simulation and what-if, stored in `data/simulator.db`. What-ifs keep working after a restart because the whole conversation is saved.
+
+Command line (results are saved to the same history):
+
+```bash
+python -m simulator races 2025                                   # calendar
+python -m simulator prefetch 2025 --rounds 1-6                   # cache race data
+python -m simulator context 2024 5                               # see exactly what Claude is given (no API call)
+python -m simulator run 2024 5 --scenario "Safety car on lap 12"  # one simulated race
+python -m simulator run 2024 5 --runs 5                          # 5 independent runs -> win/podium/points %
+python -m simulator chat 2024 5                                  # interactive what-if loop
+```
+
+## What Claude is given (FastF1 source)
+
+Everything known **before lights out**, condensed into tables (`simulator/fastf1_source.py`, `simulator/weekend.py`):
+
+| Section | Contents |
+|---|---|
+| Grid | Official grid including penalties and pit-lane starts, gap to pole, best practice long run |
+| Every session | FP1–FP3, sprint qualifying/shootout, sprint, qualifying: gap to session best, top speed, ideal lap from best sectors, laps run |
+| Long runs | Each driver's longest green-flag stint per compound: median pace and fuel-corrected tyre degradation (s/lap) |
+| Compounds | Field-wide pace, degradation and the longest stint seen on each compound |
+| Conditions | Weather per session; race-day weather used as the forecast (`race_weather=False` for a strict backtest) |
+| Race control | Penalties, investigations, grid drops, track-limit deletions per driver |
+| Season | Drivers' and constructors' standings before the race, plus the last three race finishes |
+| History | The last three races at this circuit: winner and grid slot, stops distribution, safety car/VSC/red flag laps, measured pit loss, lap-1 moves, top-10 strategies |
+
+The real race result is loaded only to score simulations afterwards and is never put in the prompt. Contexts are cached in `data/contexts/`, so each weekend is downloaded once.
+
+## How it works
+
+```mermaid
+flowchart LR
+    subgraph Context["Race context"]
+        F1["FastF1<br/>quali gaps · grid incl. penalties<br/>FP long-run pace · weather"]
+        DB["Stored data<br/>(DynamoDB / fixtures)"]
+        CK["Circuit table<br/>laps · pit loss · SC odds<br/>overtaking · tyre stress"]
+    end
+    F1 & DB & CK --> P["Prompt context<br/>(cached)"]
+    S["Scenario / what-if"] --> C
+    P --> C["Claude<br/>structured output"]
+    C --> V{"Consistency check<br/>positions · stints · lap chart"}
+    V -- issues --> C
+    V -- ok --> R["Result<br/>classification · strategies · lap chart<br/>events · insights · race report"]
+```
+
+| Piece | File |
+|---|---|
+| Race context model + builders (`fastf1`, `fixtures`/DynamoDB, `model` knowledge only; `auto` tries them in order) | `simulator/context.py` |
+| Full-weekend FastF1 loader / pure analysis functions (long runs, deg, pit loss, SC periods...) | `simulator/fastf1_source.py`, `simulator/weekend.py` |
+| Context cache + SQLite history | `simulator/store.py` |
+| Markdown export | `simulator/export.py` |
+| Circuit facts + 2024–2026 calendars (offline fallback) | `simulator/circuits.py` |
+| Output schema Claude must return | `simulator/schema.py` |
+| Claude calls, what-if sessions, Monte Carlo runs | `simulator/engine.py` |
+| Consistency checks, points, accuracy vs the real result | `simulator/validate.py` |
+| Local app: background jobs, history, export API + static dashboard | `simulator/server.py`, `frontend/` |
+| Offline demo pace model (no AI, for UI work and tests) | `simulator/demo.py` |
+
+- **Model:** `claude-opus-5-5` with effort `high` by default; override with `SIM_MODEL` / `SIM_EFFORT` or `--model` / `--effort`.
+- **Structured output:** responses are validated against `RaceSimulation`, then checked for race-level consistency. If anything is off, Claude gets one repair turn.
+- **What-ifs** continue the same conversation, so Claude re-simulates from the point of divergence and explains what changed.
+- **Monte Carlo** (`--runs N`) runs independent simulations in parallel and aggregates win / podium / points / DNF probabilities.
+- **Backtesting:** for past races the real result is loaded but never shown to Claude. Each simulation is scored against it (winner, podium overlap, mean position error).
+- **Refusal fallback:** requests opt into server-side refusal fallbacks (`fallbacks: "default"`), so a declined request is retried on Anthropic's recommended fallback model instead of failing.
+- **Cost:** a full-context prompt is roughly 10–20k input tokens, and one simulation is roughly 8–20k output tokens including thinking. A Monte Carlo run multiplies that by N; the race context is prompt-cached across runs and what-ifs.
 
 ---
+
+## Data pipeline (serverless, unchanged)
+
+A serverless F1 data platform on AWS: Lambda (zip + container images), DynamoDB, S3, CloudFront and API Gateway. It ingests real telemetry and historical race data, and its predictor Lambda still produces the heuristic driver-level forecast described below.
+
+> The CloudFront dashboard deploy publishes the new simulator UI, but the simulator API currently only runs locally (`python -m simulator.server`). Moving it to a Lambda is the next step.
+
 
 ## Architecture
 
@@ -212,13 +301,18 @@ pitstop-analytics/
 │   ├── circuit_profiler.py
 │   ├── features.py
 │   └── upgrade_detector.py
-├── frontend/
+├── simulator/                      # AI race simulator (Claude) + local server
+│   ├── context.py · circuits.py · schema.py
+│   ├── engine.py · validate.py · demo.py
+│   ├── server.py · __main__.py
+│   └── tests/
+├── frontend/                       # simulator dashboard
 │   ├── index.html
 │   ├── src/
 │   │   ├── main.js
 │   │   ├── api.js
 │   │   ├── config.js
-│   │   └── charts/
+│   │   └── sim/                    # lap chart + tyre strategy chart
 │   └── styles/main.css
 └── .github/workflows/
     ├── deploy-infra.yml            # SAM build + deploy on push to main
@@ -266,13 +360,13 @@ The GitHub Actions workflow in `.github/workflows/deploy-infra.yml` does the sam
 ## Local development
 
 ```bash
-make preflight              # all unit tests green
-python scripts/local_api.py --mock --port 3030    # local dev API w/ mock data
-cd frontend && python3 -m http.server 8080        # serve dashboard
-open http://localhost:8080
+make preflight                 # pipeline unit tests
+make test-simulator            # simulator unit tests (fake Claude client, no API calls)
+make sim-demo                  # dashboard against the offline demo model
+make sim                       # dashboard with real Claude simulations (needs ANTHROPIC_API_KEY)
 ```
 
-Switch `frontend/src/config.js` `LOCAL_API` to `http://localhost:3030` for the local mock backend.
+`python scripts/local_api.py --mock` still serves the pipeline's original analysis API for debugging.
 
 ---
 

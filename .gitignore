@@ -51,3 +51,6 @@ dist/
 
 # Logs
 *.log
+
+# Simulator local data (race-context cache + simulation history)
+data/
