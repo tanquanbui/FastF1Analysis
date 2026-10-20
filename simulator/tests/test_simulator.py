@@ -20,6 +20,9 @@ class _Stream:
     def __exit__(self, *exc):
         return False
 
+    def __iter__(self):
+        return iter(())
+
     def get_final_message(self):
         return self._message
 
@@ -124,3 +127,46 @@ def test_validation_flags_duplicates(ctx):
     sim = demo_simulation(ctx).model_copy(deep=True)
     sim.classification[1].driver = sim.classification[0].driver
     assert any("more than once" in i for i in validate.check(sim, ctx))
+
+
+def test_session_survives_restart(ctx, tmp_path):
+    """Saved conversation (with real SDK blocks) resumes for a what-if."""
+    import json
+
+    from anthropic.types.beta import BetaThinkingBlock
+    from anthropic.types.beta.parsed_beta_message import ParsedBetaTextBlock
+
+    from simulator.schema import RaceSimulation
+    from simulator.store import History
+
+    client = FakeClient([demo_simulation(ctx), demo_simulation(ctx, seed=5)])
+    first = demo_simulation(ctx)
+    client.outputs[0] = first
+    original_stream = client._stream
+
+    def stream_with_sdk_blocks(**kwargs):
+        s = original_stream(**kwargs)
+        s._message.content = [
+            BetaThinkingBlock(type="thinking", thinking="plan", signature="sig"),
+            ParsedBetaTextBlock[RaceSimulation](type="text", text="{}", parsed_output=first),
+        ]
+        return s
+
+    client.beta.messages.stream = stream_with_sdk_blocks
+    simulator = RaceSimulator(client)
+    session = simulator.start(ctx)
+    session.run()
+
+    history = History(tmp_path / "h.db")
+    history.save_session(session, "fixtures")
+    loaded_ctx, messages, source = history.load_session(session.id)
+    assistant = messages[1]["content"]
+    assert assistant[0] == {"type": "thinking", "thinking": "plan", "signature": "sig"}
+    assert "parsed_output" not in assistant[1]
+    json.dumps(messages)  # fully serialisable
+
+    resumed = simulator.resume(session.id, loaded_ctx, messages)
+    follow = resumed.what_if("What if it rained?")
+    assert follow.session_id == session.id
+    assert [m["role"] for m in client.calls[-1]["messages"]] == ["user", "assistant", "user"]
+    assert source == "fixtures" and loaded_ctx.actual_result == ctx.actual_result

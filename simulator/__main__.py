@@ -5,6 +5,8 @@
     python -m simulator run 2024 5 --runs 5            # Monte Carlo
     python -m simulator chat 2024 5                    # interactive what-ifs
     python -m simulator context 2024 5                 # print the prompt context only (no API call)
+    python -m simulator prefetch 2024                  # load + cache every 2024 weekend from FastF1
+    python -m simulator prefetch 2024 --rounds 1-5
 
 Needs ANTHROPIC_API_KEY (or an `ant auth login` profile) for anything that
 simulates.
@@ -18,8 +20,28 @@ import sys
 from pathlib import Path
 
 from .circuits import list_calendar
-from .context import build_context
+from .context import RaceContext, build_context
 from .engine import MonteCarloSummary, RaceSimulator, SimulationError, SimulationResult
+from .store import ContextCache, History
+
+
+def _context(year: int, rnd: int, source: str, refresh: bool = False) -> RaceContext:
+    cache = ContextCache()
+    ctx = None if refresh else cache.get(year, rnd, source)
+    if ctx is None:
+        ctx = build_context(year, rnd, source=source, progress=lambda m: print(f"  {m}...", file=sys.stderr))
+        cache.put(ctx, source)
+    return ctx
+
+
+def _rounds(spec: str | None, year: int) -> list[int]:
+    if spec:
+        out: list[int] = []
+        for part in spec.split(","):
+            a, _, b = part.partition("-")
+            out += list(range(int(a), int(b or a) + 1))
+        return out
+    return [r["round"] for r in list_calendar(year)] or list(range(1, 25))
 
 
 def _print_result(result: SimulationResult) -> None:
@@ -72,11 +94,18 @@ def main(argv: list[str] | None = None) -> int:
     p_races = sub.add_parser("races", help="list the calendar for a season")
     p_races.add_argument("year", type=int)
 
+    p_pre = sub.add_parser("prefetch", help="load and cache race contexts ahead of time")
+    p_pre.add_argument("year", type=int)
+    p_pre.add_argument("--rounds", help="e.g. 1-5 or 3,7,9 (default: whole season)")
+    p_pre.add_argument("--source", choices=["fastf1", "fixtures", "model"], default="fastf1")
+    p_pre.add_argument("--refresh", action="store_true", help="rebuild even if cached")
+
     for name in ("run", "chat", "context"):
         p = sub.add_parser(name)
         p.add_argument("year", type=int)
         p.add_argument("round", type=int)
         p.add_argument("--source", choices=["auto", "fastf1", "fixtures", "model"], default="auto")
+        p.add_argument("--refresh", action="store_true", help="rebuild the race context instead of using the cache")
         if name in ("run", "chat"):
             p.add_argument("--scenario", help="what-if premise for the race, e.g. 'VER starts from the pit lane'")
             p.add_argument("--model", help="Claude model id (default claude-opus-5-5 or $SIM_MODEL)")
@@ -94,26 +123,48 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{r['round']:>2}  {r['circuit_key']:<14} {r['event_name']} - {r['circuit']}")
         return 0
 
-    ctx = build_context(args.year, args.round, source=args.source)
+    if args.cmd == "prefetch":
+        failed = 0
+        for rnd in _rounds(args.rounds, args.year):
+            try:
+                ctx = _context(args.year, rnd, args.source, refresh=args.refresh)
+                print(f"R{rnd:>2} {ctx.event_name}: {len(ctx.drivers)} drivers, {len(ctx.tables)} tables")
+            except Exception as exc:  # noqa: BLE001 - keep going through the season
+                failed += 1
+                print(f"R{rnd:>2} failed: {exc}", file=sys.stderr)
+        return 1 if failed else 0
+
+    ctx = _context(args.year, args.round, args.source, refresh=args.refresh)
     if args.cmd == "context":
         print(ctx.to_prompt())
         return 0
 
     kwargs = {k: v for k, v in (("model", args.model), ("effort", args.effort)) if v}
     simulator = RaceSimulator(**kwargs)
+    history = History()
     try:
         if args.cmd == "run" and args.runs > 1:
-            summary = simulator.simulate_many(ctx, args.scenario, runs=args.runs)
+            summary = simulator.simulate_many(
+                ctx, args.scenario, runs=args.runs, on_session=lambda s: history.save_session(s, args.source)
+            )
+            for r in summary.results:
+                history.save_result(r, "ai")
             _print_summary(summary)
             payload = summary.model_dump(mode="json")
         elif args.cmd == "run":
-            result = simulator.simulate(ctx, args.scenario)
+            session = simulator.start(ctx)
+            result = session.run(args.scenario)
+            history.save_session(session, args.source)
+            history.save_result(result, "ai")
             _print_result(result)
             payload = result.model_dump(mode="json")
         else:
             session = simulator.start(ctx)
             print(f"Simulating {ctx.year} {ctx.event_name}...")
-            _print_result(session.run(args.scenario))
+            result = session.run(args.scenario)
+            history.save_session(session, args.source)
+            history.save_result(result, "ai")
+            _print_result(result)
             while True:
                 try:
                     question = input("\nwhat if> ").strip()
@@ -121,7 +172,10 @@ def main(argv: list[str] | None = None) -> int:
                     break
                 if question.lower() in ("", "q", "quit", "exit"):
                     break
-                _print_result(session.what_if(question))
+                result = session.what_if(question)
+                history.save_session(session, args.source)
+                history.save_result(result, "ai")
+                _print_result(result)
             return 0
     except SimulationError as exc:
         print(f"Simulation failed: {exc}", file=sys.stderr)

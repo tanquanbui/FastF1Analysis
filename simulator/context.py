@@ -2,8 +2,9 @@
 
 Contexts come from one of three sources:
 
-* ``fastf1``   - live: event schedule, qualifying/grid, practice long-run pace,
-                 weather, and (for past races) the actual result for comparison.
+* ``fastf1``   - the full weekend from live timing: every session's pace, long
+                 runs and tyre deg, qualifying, grid, weather, penalties, standings,
+                 recent form and the last races at this circuit (see fastf1_source.py).
 * ``fixtures`` - DynamoDB-shaped items, e.g. ``scripts/mock_fixtures`` or a table
                  scan, as written by the processor Lambda.
 * ``model``    - circuit facts only; Claude fills in the entry list and form from
@@ -17,11 +18,11 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 from pydantic import BaseModel, Field
 
-from .circuits import CIRCUITS, circuit_for_round, circuit_key_for_location, event_name
+from .circuits import CIRCUITS, circuit_for_round, event_name
 
 logger = logging.getLogger(__name__)
 
@@ -71,18 +72,53 @@ class DriverEntry(BaseModel):
     notes: str | None = None
 
 
+class DataTable(BaseModel):
+    """A compact table of evidence, rendered into the prompt and the UI."""
+
+    key: str
+    section: Literal["weekend", "season", "history"]
+    title: str
+    columns: list[str]
+    rows: list[list[Any]]
+    note: str | None = None
+
+    def to_markdown(self) -> str:
+        def cell(v: Any) -> str:
+            return "-" if v is None or v == "" else str(v).replace("|", "/")
+
+        lines = [f"### {self.title}", "", "| " + " | ".join(self.columns) + " |",
+                 "|" + "---|" * len(self.columns)]
+        lines += ["| " + " | ".join(cell(v) for v in row) + " |" for row in self.rows]
+        if self.note:
+            lines += ["", f"_{self.note}_"]
+        return "\n".join(lines)
+
+
+SECTION_TITLES = {
+    "weekend": "This weekend",
+    "season": "Season so far",
+    "history": "History at this circuit",
+}
+
+
 class RaceContext(BaseModel):
     year: int
     round: int | None = None
     event_name: str
+    weekend_format: str | None = None
     circuit: CircuitInfo
     drivers: list[DriverEntry] = Field(default_factory=list)
     weather: str | None = None
     extra_notes: list[str] = Field(default_factory=list)
+    tables: list[DataTable] = Field(default_factory=list)
     data_sources: list[str] = Field(default_factory=list)
     # Real finishing order (driver codes) for past races. Never sent to the
     # model - only used to score a simulation after the fact.
     actual_result: list[str] | None = Field(default=None, exclude=True)
+
+    def to_cache(self) -> dict[str, Any]:
+        """Full serialisation for the on-disk cache, including the real result."""
+        return {**self.model_dump(mode="json"), "actual_result": self.actual_result}
 
     @property
     def driver_codes(self) -> list[str]:
@@ -93,6 +129,7 @@ class RaceContext(BaseModel):
         c = self.circuit
         lines = [
             f"# {self.year} {self.event_name}" + (f" (round {self.round})" if self.round else ""),
+            *([f"Weekend format: {self.weekend_format}"] if self.weekend_format else []),
             "",
             "## Circuit",
             f"- {c.name}, {c.country}",
@@ -126,6 +163,11 @@ class RaceContext(BaseModel):
                 "(official three-letter driver codes) and your best knowledge of the qualifying "
                 "order and each team's competitive form at that point of the season."
             )
+        for section, heading in SECTION_TITLES.items():
+            tables = [t for t in self.tables if t.section == section]
+            if tables:
+                lines += ["", f"## {heading}", ""]
+                lines += [t.to_markdown() + "\n" for t in tables]
         if self.extra_notes:
             lines += ["", "## Additional notes", *[f"- {n}" for n in self.extra_notes]]
         if self.data_sources:
@@ -147,6 +189,7 @@ def build_context(
     circuit: str | None = None,
     source: Source = "auto",
     fixtures_dir: Path | str | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> RaceContext:
     """Build a race context for ``year`` + (``round_number`` or ``circuit`` key)."""
     if round_number is None and circuit is None:
@@ -159,7 +202,9 @@ def build_context(
             if attempt == "fastf1":
                 if round_number is None:
                     raise ValueError("FastF1 source needs a round number")
-                return from_fastf1(year, round_number)
+                from .fastf1_source import from_fastf1
+
+                return from_fastf1(year, round_number, progress=progress)
             if attempt == "fixtures":
                 if round_number is None:
                     raise ValueError("fixtures source needs a round number")
@@ -251,100 +296,6 @@ def from_items(year: int, round_number: int, items: list[dict[str, Any]], source
         data_sources=[source_label, "circuit reference table"],
         actual_result=actual,
     )
-
-
-def from_fastf1(year: int, round_number: int, cache_dir: str | None = None) -> RaceContext:
-    import fastf1  # heavy import; optional dependency
-
-    cache = Path(cache_dir or os.environ.get("FASTF1_CACHE", ROOT / "fastf1_cache"))
-    cache.mkdir(parents=True, exist_ok=True)
-    fastf1.Cache.enable_cache(str(cache))
-
-    event = fastf1.get_event(year, round_number)
-    key = circuit_key_for_location(str(event["Location"])) or circuit_for_round(year, round_number)
-    if key is None:
-        raise ValueError(f"unknown circuit location {event['Location']!r}")
-    info = _circuit_info(key)
-    sources = ["FastF1"]
-
-    drivers: dict[str, DriverEntry] = {}
-    quali = event.get_session("Qualifying")
-    quali.load(laps=False, telemetry=False, weather=False, messages=False)
-    q_res = quali.results
-    best = {}
-    for _, row in q_res.iterrows():
-        times = [row.get(c) for c in ("Q3", "Q2", "Q1")]
-        secs = [t.total_seconds() for t in times if t is not None and str(t) != "NaT"]
-        best[row["Abbreviation"]] = min(secs) if secs else None
-    pole = min((v for v in best.values() if v), default=None)
-    for _, row in q_res.iterrows():
-        code = row["Abbreviation"]
-        drivers[code] = DriverEntry(
-            code=code,
-            name=row.get("FullName"),
-            team=team_code(row.get("TeamName")),
-            grid=int(row["Position"]) if str(row.get("Position")) not in ("nan", "None") else None,
-            quali_gap_s=round(best[code] - pole, 3) if best.get(code) and pole else None,
-        )
-
-    _add_long_runs(event, drivers)
-
-    weather, actual = None, None
-    try:
-        race = event.get_session("Race")
-        race.load(laps=False, telemetry=False, weather=True, messages=False)
-        r_res = race.results
-        if len(r_res):
-            for _, row in r_res.iterrows():
-                code = row["Abbreviation"]
-                grid = row.get("GridPosition")
-                if code in drivers and grid and str(grid) != "nan" and int(grid) > 0:
-                    drivers[code].grid = int(grid)  # race grid includes penalties
-                elif code in drivers and grid is not None and str(grid) != "nan" and int(grid) == 0:
-                    drivers[code].notes = "Starts from the pit lane"
-            actual = [row["Abbreviation"] for _, row in r_res.sort_values("Position").iterrows()]
-        wd = race.weather_data
-        if wd is not None and len(wd):
-            rain = bool(wd["Rainfall"].any())
-            weather = (
-                f"Air {wd['AirTemp'].mean():.0f}C, track {wd['TrackTemp'].mean():.0f}C, "
-                f"{'rain observed during the race window' if rain else 'dry'}"
-            )
-    except Exception as exc:  # noqa: BLE001 - race not run yet
-        logger.info("no race session data: %s", exc)
-
-    return RaceContext(
-        year=year,
-        round=round_number,
-        event_name=str(event["EventName"]),
-        circuit=info,
-        drivers=list(drivers.values()),
-        weather=weather,
-        data_sources=sources + ["circuit reference table"],
-        actual_result=actual,
-    )
-
-
-def _add_long_runs(event: Any, drivers: dict[str, DriverEntry]) -> None:
-    """Median lap of each driver's longest practice stint (>=5 clean laps)."""
-    for name in ("Practice 2", "Practice 1"):
-        try:
-            session = event.get_session(name)
-            session.load(laps=True, telemetry=False, weather=False, messages=False)
-        except Exception as exc:  # noqa: BLE001 - sprint weekends have no FP2
-            logger.info("no %s: %s", name, exc)
-            continue
-        laps = session.laps.pick_quicklaps().pick_wo_box()
-        for code, entry in drivers.items():
-            d_laps = laps[laps["Driver"] == code]
-            best_stint = None
-            for _, stint in d_laps.groupby("Stint"):
-                if len(stint) >= 5 and (best_stint is None or len(stint) > len(best_stint)):
-                    best_stint = stint
-            if best_stint is not None:
-                entry.long_run_pace_s = round(best_stint["LapTime"].dt.total_seconds().median(), 3)
-                entry.long_run_compound = str(best_stint["Compound"].iloc[0])
-        return
 
 
 def _float(value: Any) -> float | None:

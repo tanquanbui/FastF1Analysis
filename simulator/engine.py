@@ -12,10 +12,11 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 import uuid
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any
+from typing import Any, Callable
 
 import anthropic
 from pydantic import BaseModel, Field
@@ -90,6 +91,21 @@ class SimulationError(RuntimeError):
     pass
 
 
+# Progress callback: receives {"stage": str, plus optional "thinking",
+# "output_chars", "laps_done", "laps_total"}.
+ProgressFn = Callable[[dict[str, Any]], None]
+PROGRESS_INTERVAL_S = 1.5
+
+
+def _to_param(block: Any) -> dict[str, Any]:
+    """Response content block -> request param (drops SDK-only parsed fields)."""
+    if isinstance(block, dict):
+        return block
+    data = block.model_dump(mode="json", exclude_none=True)
+    data.pop("parsed_output", None)
+    return data
+
+
 class Usage(BaseModel):
     input_tokens: int = 0
     output_tokens: int = 0
@@ -129,15 +145,30 @@ class MonteCarloSummary(BaseModel):
 class SimulationSession:
     """A multi-turn conversation with Claude about one race."""
 
-    def __init__(self, simulator: "RaceSimulator", context: RaceContext):
-        self.id = uuid.uuid4().hex[:12]
+    def __init__(
+        self,
+        simulator: "RaceSimulator",
+        context: RaceContext,
+        *,
+        session_id: str | None = None,
+        messages: list[dict[str, Any]] | None = None,
+    ):
+        self.id = session_id or uuid.uuid4().hex[:12]
         self.simulator = simulator
         self.context = context
-        self.messages: list[dict[str, Any]] = []
+        # JSON-serialisable conversation, so sessions can be saved and resumed.
+        self.messages: list[dict[str, Any]] = messages or []
         self.results: list[SimulationResult] = []
         self.usage = Usage()
+        self.progress: ProgressFn = lambda _event: None
 
-    def run(self, scenario: str | None = None, *, run_note: str | None = None) -> SimulationResult:
+    def run(
+        self,
+        scenario: str | None = None,
+        *,
+        run_note: str | None = None,
+        progress: ProgressFn | None = None,
+    ) -> SimulationResult:
         if self.messages:
             raise SimulationError("run() already called - use what_if() for follow-ups")
         task = "Simulate this race."
@@ -148,6 +179,7 @@ class SimulationSession:
         return self._turn(
             "run",
             scenario,
+            progress,
             {
                 "role": "user",
                 "content": [
@@ -159,14 +191,17 @@ class SimulationSession:
             },
         )
 
-    def what_if(self, question: str) -> SimulationResult:
+    def what_if(self, question: str, *, progress: ProgressFn | None = None) -> SimulationResult:
         if not self.messages:
             raise SimulationError("call run() before what_if()")
         return self._turn(
-            "what_if", question, {"role": "user", "content": FOLLOW_UP_PROMPT.format(question=question)}
+            "what_if", question, progress, {"role": "user", "content": FOLLOW_UP_PROMPT.format(question=question)}
         )
 
-    def _turn(self, kind: str, prompt: str | None, user_message: dict[str, Any]) -> SimulationResult:
+    def _turn(
+        self, kind: str, prompt: str | None, progress: ProgressFn | None, user_message: dict[str, Any]
+    ) -> SimulationResult:
+        self.progress = progress or (lambda _event: None)
         start = len(self.messages)
         self.messages.append(user_message)
         try:
@@ -182,6 +217,7 @@ class SimulationSession:
         issues = validate.check(sim, self.context)
         if issues and self.simulator.repair:
             logger.info("repairing %d consistency issues", len(issues))
+            self.progress({"stage": f"Fixing {len(issues)} consistency issue(s)"})
             self.messages.append(
                 {"role": "user", "content": REPAIR_PROMPT.format(issues="\n".join(f"- {i}" for i in issues))}
             )
@@ -206,6 +242,8 @@ class SimulationSession:
 
     def _call(self, usage: Usage) -> RaceSimulation:
         sim = self.simulator
+        laps = self.context.circuit.laps
+        self.progress({"stage": "Claude is reading the race data", "laps_total": laps})
         try:
             with sim.client.beta.messages.stream(
                 model=sim.model,
@@ -213,11 +251,29 @@ class SimulationSession:
                 system=SYSTEM_PROMPT,
                 messages=self.messages,
                 output_format=RaceSimulation,
+                # Summarised thinking lets the UI show the strategist's reasoning live.
+                thinking={"type": "adaptive", "display": "summarized"},
                 output_config={"effort": sim.effort},
                 cache_control={"type": "ephemeral"},
                 betas=[FALLBACK_BETA],
                 fallbacks="default",
             ) as stream:
+                last = 0.0
+                for event in stream:
+                    now = time.monotonic()
+                    if now - last < PROGRESS_INTERVAL_S or event.type not in ("thinking", "text"):
+                        continue
+                    last = now
+                    if event.type == "thinking":
+                        self.progress({"stage": "Claude is working out the race", "thinking": event.snapshot[-1500:]})
+                    else:
+                        snap = event.snapshot
+                        self.progress({
+                            "stage": "Writing the simulation",
+                            "output_chars": len(snap),
+                            "laps_done": snap.count('"lap":') if '"lap_chart"' in snap else 0,
+                            "laps_total": laps,
+                        })
                 message = stream.get_final_message()
         except anthropic.APIError as exc:
             raise SimulationError(f"Claude API error: {exc}") from exc
@@ -231,7 +287,7 @@ class SimulationSession:
             raise SimulationError(f"No structured output (stop_reason={message.stop_reason})")
         # Append-only history: the full assistant content (including thinking
         # blocks) goes back so follow-ups build on the same reasoning.
-        self.messages.append({"role": "assistant", "content": message.content})
+        self.messages.append({"role": "assistant", "content": [_to_param(b) for b in message.content]})
         return message.parsed_output
 
 
@@ -252,6 +308,9 @@ class RaceSimulator:
     def start(self, context: RaceContext) -> SimulationSession:
         return SimulationSession(self, context)
 
+    def resume(self, session_id: str, context: RaceContext, messages: list[dict[str, Any]]) -> SimulationSession:
+        return SimulationSession(self, context, session_id=session_id, messages=messages)
+
     def simulate(self, context: RaceContext, scenario: str | None = None) -> SimulationResult:
         return self.start(context).run(scenario)
 
@@ -261,8 +320,12 @@ class RaceSimulator:
         scenario: str | None = None,
         runs: int = 5,
         max_workers: int = 4,
+        progress: ProgressFn | None = None,
+        on_session: Callable[[SimulationSession], None] | None = None,
     ) -> MonteCarloSummary:
         """Independent runs in parallel, aggregated into probabilities."""
+        report = progress or (lambda _event: None)
+        finished = [0]
 
         def one(i: int) -> SimulationResult:
             note = (
@@ -270,7 +333,15 @@ class RaceSimulator:
                 "unfolds rather than the single most likely outcome: let incidents, safety cars "
                 "and strategy gambles land where they realistically might."
             )
-            return self.start(context).run(scenario, run_note=note)
+            session = self.start(context)
+            # Live detail from the first run only; the rest report completion.
+            forward = (lambda e: report({**e, "runs_done": finished[0], "runs_total": runs})) if i == 0 else None
+            result = session.run(scenario, run_note=note, progress=forward)
+            finished[0] += 1
+            report({"stage": f"{finished[0]} of {runs} runs finished", "runs_done": finished[0], "runs_total": runs})
+            if on_session:
+                on_session(session)
+            return result
 
         with ThreadPoolExecutor(max_workers=max(1, min(max_workers, runs))) as pool:
             results = list(pool.map(one, range(runs)))

@@ -1,5 +1,5 @@
 import { config } from "../config.js";
-import { esc } from "./util.js";
+import { esc } from "../util.js";
 
 let positionChart = null;
 

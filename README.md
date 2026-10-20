@@ -9,19 +9,44 @@ The dashboard is now simulator-first. The serverless data pipeline described fur
 ```bash
 pip install -r simulator/requirements.txt
 export ANTHROPIC_API_KEY=sk-ant-...        # without it the app runs in offline demo mode
+python -m simulator prefetch 2024          # optional: load + cache every 2024 weekend from FastF1 ahead of time
 python -m simulator.server                 # or: make sim
 open http://localhost:8080
 ```
 
-Command line:
+In the app:
+
+- **New simulation**: pick a season (2018 onwards) and Grand Prix, then load the race data. The explorer shows everything Claude will get: grid, every session of the weekend, season form, history at the circuit, and the exact prompt. Add a scenario and simulate. Claude's reasoning streams live while it works.
+- **Result page** (`#/r/<id>`): podium, classification, lap chart, tyre strategies with pit-call reasons, key moments, strategy brief and race report, scored against the real race for past events. Ask what-ifs; each one becomes a new version tab. Export a Markdown report or the full JSON.
+- **History**: every simulation and what-if, stored in `data/simulator.db`. What-ifs keep working after a restart because the whole conversation is saved.
+
+Command line (results are saved to the same history):
 
 ```bash
 python -m simulator races 2025                                   # calendar
+python -m simulator prefetch 2025 --rounds 1-6                   # cache race data
 python -m simulator context 2024 5                               # see exactly what Claude is given (no API call)
 python -m simulator run 2024 5 --scenario "Safety car on lap 12"  # one simulated race
 python -m simulator run 2024 5 --runs 5                          # 5 independent runs -> win/podium/points %
 python -m simulator chat 2024 5                                  # interactive what-if loop
 ```
+
+## What Claude is given (FastF1 source)
+
+Everything known **before lights out**, condensed into tables (`simulator/fastf1_source.py`, `simulator/weekend.py`):
+
+| Section | Contents |
+|---|---|
+| Grid | Official grid including penalties and pit-lane starts, gap to pole, best practice long run |
+| Every session | FP1–FP3, sprint qualifying/shootout, sprint, qualifying: gap to session best, top speed, ideal lap from best sectors, laps run |
+| Long runs | Each driver's longest green-flag stint per compound: median pace and fuel-corrected tyre degradation (s/lap) |
+| Compounds | Field-wide pace, degradation and the longest stint seen on each compound |
+| Conditions | Weather per session; race-day weather used as the forecast (`race_weather=False` for a strict backtest) |
+| Race control | Penalties, investigations, grid drops, track-limit deletions per driver |
+| Season | Drivers' and constructors' standings before the race, plus the last three race finishes |
+| History | The last three races at this circuit: winner and grid slot, stops distribution, safety car/VSC/red flag laps, measured pit loss, lap-1 moves, top-10 strategies |
+
+The real race result is loaded only to score simulations afterwards and is never put in the prompt. Contexts are cached in `data/contexts/`, so each weekend is downloaded once.
 
 ## How it works
 
@@ -42,12 +67,15 @@ flowchart LR
 
 | Piece | File |
 |---|---|
-| Race context builders (`fastf1`, `fixtures`/DynamoDB, `model` knowledge only; `auto` tries them in order) | `simulator/context.py` |
+| Race context model + builders (`fastf1`, `fixtures`/DynamoDB, `model` knowledge only; `auto` tries them in order) | `simulator/context.py` |
+| Full-weekend FastF1 loader / pure analysis functions (long runs, deg, pit loss, SC periods...) | `simulator/fastf1_source.py`, `simulator/weekend.py` |
+| Context cache + SQLite history | `simulator/store.py` |
+| Markdown export | `simulator/export.py` |
 | Circuit facts + 2024–2026 calendars (offline fallback) | `simulator/circuits.py` |
 | Output schema Claude must return | `simulator/schema.py` |
 | Claude calls, what-if sessions, Monte Carlo runs | `simulator/engine.py` |
 | Consistency checks, points, accuracy vs the real result | `simulator/validate.py` |
-| Local API + static dashboard | `simulator/server.py`, `frontend/` |
+| Local app: background jobs, history, export API + static dashboard | `simulator/server.py`, `frontend/` |
 | Offline demo pace model (no AI, for UI work and tests) | `simulator/demo.py` |
 
 - **Model:** `claude-opus-5-5` with effort `high` by default; override with `SIM_MODEL` / `SIM_EFFORT` or `--model` / `--effort`.
@@ -56,7 +84,7 @@ flowchart LR
 - **Monte Carlo** (`--runs N`) runs independent simulations in parallel and aggregates win / podium / points / DNF probabilities.
 - **Backtesting:** for past races the real result is loaded but never shown to Claude. Each simulation is scored against it (winner, podium overlap, mean position error).
 - **Refusal fallback:** requests opt into server-side refusal fallbacks (`fallbacks: "default"`), so a declined request is retried on Anthropic's recommended fallback model instead of failing.
-- **Cost:** one race simulation is roughly 8–20k output tokens including thinking. A Monte Carlo run multiplies that by N; the race context is prompt-cached across runs and what-ifs.
+- **Cost:** a full-context prompt is roughly 10–20k input tokens, and one simulation is roughly 8–20k output tokens including thinking. A Monte Carlo run multiplies that by N; the race context is prompt-cached across runs and what-ifs.
 
 ---
 
